@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config';
 import { MAX_LINE_QUANTITY, MAX_UNIT_PRICE_PAISE, discount, lineTotal, total } from '../src/domain/money';
+import { assertTestDatabaseUrl } from './helpers/test-db-url';
 
 describe('T27 money', () => {
   it('floors the discount: the cable at 34999 with 10% off gives 3499, not 3500', () => {
@@ -70,5 +71,22 @@ describe('T29 config', () => {
       LOCK_TIMEOUT_MS: 5_000,
       PORT: 3000,
     });
+  });
+});
+
+describe('test database guard', () => {
+  it.each([
+    'postgres://checkout:checkout@localhost:5432/checkout',
+    'postgres://checkout:checkout@localhost:5432/checkout_testing',
+    'not a url',
+  ])('refuses %s', (url) => {
+    expect(() => assertTestDatabaseUrl(url)).toThrow(/Refusing to run tests/);
+  });
+
+  it.each([
+    'postgres://checkout:checkout@localhost:5432/checkout_test',
+    'postgres://checkout:checkout@localhost:5432/checkout_test?sslmode=disable',
+  ])('accepts %s', (url) => {
+    expect(assertTestDatabaseUrl(url)).toBe(url);
   });
 });
