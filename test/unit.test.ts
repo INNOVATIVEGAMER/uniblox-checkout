@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { Hono } from 'hono';
+import { describe, expect, it, vi } from 'vitest';
 import { loadConfig } from '../src/config';
+import { onError } from '../src/errors';
 import { MAX_LINE_QUANTITY, MAX_UNIT_PRICE_PAISE, discount, lineTotal, total } from '../src/domain/money';
 import { assertTestDatabaseUrl } from './helpers/test-db-url';
 
@@ -88,5 +90,25 @@ describe('test database guard', () => {
     'postgres://checkout:checkout@localhost:5432/checkout_test?sslmode=disable',
   ])('accepts %s', (url) => {
     expect(assertTestDatabaseUrl(url)).toBe(url);
+  });
+});
+
+describe('onError', () => {
+  it('maps an unexpected error to 500 INTERNAL without leaking it', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const app = new Hono()
+      .get('/boom', () => {
+        throw new Error('secret-detail');
+      })
+      .onError(onError);
+
+    const res = await app.request('/boom');
+
+    expect(res.status).toBe(500);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({ error: { code: 'INTERNAL', message: expect.any(String) } });
+    expect(text).not.toContain('secret-detail');
+    expect(log).toHaveBeenCalledOnce();
+    log.mockRestore();
   });
 });

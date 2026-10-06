@@ -22,3 +22,17 @@ export async function resetDb(db: Db): Promise<void> {
   await db.execute(sql.raw(`TRUNCATE ${names} RESTART IDENTITY CASCADE`));
   await seed(db);
 }
+
+export async function snapshotDb(db: Db): Promise<Record<string, unknown>> {
+  const tables = await db.execute<{ tablename: string }>(
+    sql`SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename`,
+  );
+  const snapshot: Record<string, unknown> = {};
+  for (const { tablename } of tables.rows) {
+    const result = await db.execute<{ rows: unknown }>(
+      sql.raw(`SELECT coalesce(json_agg(t ORDER BY t::text), '[]') AS rows FROM "public"."${tablename}" t`),
+    );
+    snapshot[tablename] = result.rows[0]?.rows;
+  }
+  return snapshot;
+}
