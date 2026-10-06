@@ -1,8 +1,10 @@
+import { DrizzleQueryError } from 'drizzle-orm/errors';
 import { Hono } from 'hono';
+import { HTTPException } from 'hono/http-exception';
 import { describe, expect, it, vi } from 'vitest';
 import { loadConfig } from '../src/config';
 import { onError } from '../src/errors';
-import { MAX_LINE_QUANTITY, MAX_UNIT_PRICE_PAISE, discount, lineTotal, total } from '../src/domain/money';
+import { MAX_CART_LINES, MAX_LINE_QUANTITY, MAX_UNIT_PRICE_PAISE, discount, lineTotal, total } from '../src/domain/money';
 import { assertTestDatabaseUrl } from './helpers/test-db-url';
 
 describe('T27 money', () => {
@@ -28,8 +30,9 @@ describe('T27 money', () => {
     }
   });
 
-  it('stays exact for a line at the price and quantity caps', () => {
-    const subtotal = lineTotal(MAX_UNIT_PRICE_PAISE - 1, MAX_LINE_QUANTITY);
+  it('stays exact for a full cart at the price, quantity and line caps', () => {
+    const subtotal = lineTotal(MAX_UNIT_PRICE_PAISE - 1, MAX_LINE_QUANTITY) * MAX_CART_LINES;
+    expect(subtotal * 100).toBeLessThanOrEqual(Number.MAX_SAFE_INTEGER);
     const exact = (BigInt(subtotal) * 33n) / 100n;
     expect(BigInt(discount(subtotal, 33))).toBe(exact);
   });
@@ -94,11 +97,15 @@ describe('test database guard', () => {
 });
 
 describe('onError', () => {
-  it('maps an unexpected error to 500 INTERNAL without leaking it', async () => {
+  it.each([
+    ['an unexpected error', new Error('secret-detail')],
+    ['a database error other than a lock timeout', new DrizzleQueryError('secret-detail', [], Object.assign(new Error('secret-detail'), { code: '23505' }))],
+    ['an HTTPException other than a 400', new HTTPException(401, { message: 'secret-detail' })],
+  ])('maps %s to 500 INTERNAL without leaking it', async (_label, thrown) => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     const app = new Hono()
       .get('/boom', () => {
-        throw new Error('secret-detail');
+        throw thrown;
       })
       .onError(onError);
 
@@ -109,6 +116,5 @@ describe('onError', () => {
     expect(JSON.parse(text)).toEqual({ error: { code: 'INTERNAL', message: expect.any(String) } });
     expect(text).not.toContain('secret-detail');
     expect(log).toHaveBeenCalledOnce();
-    log.mockRestore();
   });
 });

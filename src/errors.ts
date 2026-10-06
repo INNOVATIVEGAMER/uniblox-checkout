@@ -1,6 +1,6 @@
-import type { Hook } from '@hono/zod-validator';
+import { type Hook, zValidator } from '@hono/zod-validator';
 import { DrizzleQueryError } from 'drizzle-orm/errors';
-import type { Env, ErrorHandler, NotFoundHandler } from 'hono';
+import type { Env, ErrorHandler, NotFoundHandler, ValidationTargets } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
@@ -41,7 +41,7 @@ export function toErrorBody(err: AppError): ErrorBody {
 // Same pattern Hono uses to decide whether to parse.
 const JSON_CONTENT_TYPE = /^application\/([a-z-.]+\+)?json(;\s*[a-zA-Z0-9-]+=([^;]+))*$/i;
 
-export const validationHook: Hook<unknown, Env, string> = (result, c) => {
+const validationHook: Hook<unknown, Env, string> = (result, c) => {
   if (result.target === 'json' && !JSON_CONTENT_TYPE.test(c.req.header('content-type') ?? '')) {
     throw new AppError('VALIDATION_ERROR', [
       { path: 'header.content-type', message: 'Content-Type must be application/json' },
@@ -57,11 +57,14 @@ export const validationHook: Hook<unknown, Env, string> = (result, c) => {
   );
 };
 
+export const validate = <Target extends keyof ValidationTargets, T extends z.ZodType>(target: Target, schema: T) =>
+  zValidator(target, schema, validationHook);
+
 const pgErrorSchema = z.object({ code: z.string(), constraint: z.string().optional() });
 
 function toAppError(err: Error): AppError {
   if (err instanceof AppError) return err;
-  if (err instanceof HTTPException) {
+  if (err instanceof HTTPException && err.status === 400) {
     return new AppError('VALIDATION_ERROR', [{ path: 'json', message: err.message }]);
   }
   if (err instanceof DrizzleQueryError) {

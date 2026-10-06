@@ -29,10 +29,10 @@ export async function snapshotDb(db: Db): Promise<Record<string, unknown>> {
   );
   const snapshot: Record<string, unknown> = {};
   for (const { tablename } of tables.rows) {
-    const result = await db.execute<{ rows: unknown }>(
-      sql.raw(`SELECT coalesce(json_agg(t ORDER BY t::text), '[]') AS rows FROM "public"."${tablename}" t`),
+    const result = await db.execute<{ data: unknown }>(
+      sql.raw(`SELECT coalesce(json_agg(t ORDER BY t::text), '[]') AS data FROM "public"."${tablename}" t`),
     );
-    snapshot[tablename] = result.rows[0]?.rows;
+    snapshot[tablename] = result.rows[0]?.data;
   }
   return snapshot;
 }

@@ -1,11 +1,10 @@
-import { zValidator } from '@hono/zod-validator';
 import { asc, eq, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { Db } from '../../db/client';
 import { products } from '../../db/schema';
 import { MAX_UNIT_PRICE_PAISE } from '../../domain/money';
-import { AppError, validationHook } from '../../errors';
+import { AppError, validate } from '../../errors';
 
 const productIdSchema = z.string().regex(/^p_[a-z0-9_]{1,60}$/, 'Invalid product id');
 
@@ -35,8 +34,8 @@ export function productsRoutes({ db }: { db: Db }) {
     })
     .patch(
       '/admin/products/:id',
-      zValidator('param', productParamsSchema, validationHook),
-      zValidator('json', patchProductSchema, validationHook),
+      validate('param', productParamsSchema),
+      validate('json', patchProductSchema),
       async (c) => {
         const { id } = c.req.valid('param');
         const [product] = await db
