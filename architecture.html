@@ -1,0 +1,832 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Checkout Architecture</title>
+<style>
+:root {
+  --bg: #fbfaf8; --surface: #ffffff; --surface-2: #f3f1ed; --border: #e3dfd8;
+  --text: #1d1b18; --muted: #6b665e; --accent: #2f5d8a; --accent-soft: #e6eef6;
+  --ok: #2e7d4f; --ok-soft: #e5f3ea; --warn: #9a6a00; --warn-soft: #fbf1d9;
+  --bad: #a83a32; --bad-soft: #f8e6e4; --code-bg: #f3f1ed;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161514; --surface: #1e1d1b; --surface-2: #262522; --border: #36332f;
+    --text: #ece9e4; --muted: #a29d94; --accent: #7fb0dd; --accent-soft: #1f2e3c;
+    --ok: #6cc28f; --ok-soft: #1b2e23; --warn: #e0b453; --warn-soft: #33291a;
+    --bad: #e58a82; --bad-soft: #3a2220; --code-bg: #262522;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161514; --surface: #1e1d1b; --surface-2: #262522; --border: #36332f;
+  --text: #ece9e4; --muted: #a29d94; --accent: #7fb0dd; --accent-soft: #1f2e3c;
+  --ok: #6cc28f; --ok-soft: #1b2e23; --warn: #e0b453; --warn-soft: #33291a;
+  --bad: #e58a82; --bad-soft: #3a2220; --code-bg: #262522;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+}
+.layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); max-width: 1180px; margin: 0 auto; }
+nav {
+  position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  padding: 32px 16px 32px 24px; border-right: 1px solid var(--border); font-size: 13px;
+}
+nav .brand { font-weight: 650; margin-bottom: 4px; }
+nav .sub { color: var(--muted); margin-bottom: 20px; }
+nav a { display: block; color: var(--muted); text-decoration: none; padding: 4px 0; }
+nav a:hover { color: var(--accent); }
+main { padding: 32px 40px 96px; min-width: 0; }
+h1 { font-size: 28px; margin: 0 0 6px; letter-spacing: -0.01em; }
+h2 { font-size: 20px; margin: 56px 0 12px; padding-top: 8px; border-top: 1px solid var(--border); }
+h3 { font-size: 16px; margin: 28px 0 8px; }
+p { margin: 8px 0; }
+.lede { color: var(--muted); max-width: 70ch; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+pre { background: var(--code-bg); padding: 14px 16px; border-radius: 8px; overflow-x: auto; line-height: 1.5; border: 1px solid var(--border); }
+pre code { background: none; padding: 0; }
+.table-wrap { overflow-x: auto; margin: 12px 0; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { background: var(--surface-2); font-weight: 600; white-space: nowrap; }
+tr:last-child td { border-bottom: none; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; margin: 12px 0; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.tag { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 99px; letter-spacing: 0.02em; vertical-align: 1px; white-space: nowrap; }
+.user { background: var(--accent-soft); color: var(--accent); }
+.rev { background: var(--ok-soft); color: var(--ok); }
+.final { background: var(--bad-soft); color: var(--bad); }
+.trans { background: var(--warn-soft); color: var(--warn); }
+.m { font-family: ui-monospace, Menlo, monospace; font-size: 12px; font-weight: 700; }
+.GET { color: var(--ok); } .POST { color: var(--accent); } .PUT { color: var(--warn); } .PATCH { color: var(--warn); } .DELETE { color: var(--bad); }
+.admin { background: var(--bad-soft); color: var(--bad); }
+.phase { font-size: 12px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); margin: 20px 0 6px; }
+.steps { list-style: none; padding: 0; margin: 8px 0; }
+.steps li { position: relative; padding: 10px 14px 10px 52px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; }
+.steps li::before { content: attr(data-n); position: absolute; left: 14px; top: 10px; width: 24px; height: 24px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: 12px; display: grid; place-items: center; }
+.steps .fail { color: var(--bad); font-size: 13px; }
+.sm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; }
+.st { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); font-weight: 600; font-size: 13px; }
+.arrow { color: var(--muted); font-size: 13px; }
+.muted { color: var(--muted); }
+ul { padding-left: 20px; }
+li { margin: 3px 0; }
+@media (max-width: 820px) {
+  .layout { grid-template-columns: 1fr; }
+  nav { position: static; height: auto; border-right: none; border-bottom: 1px solid var(--border); padding: 20px 16px; }
+  nav .links { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+  main { padding: 24px 16px 64px; }
+}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav>
+  <div class="brand">Checkout &amp; Rewards</div>
+  <div class="sub">Architecture v4</div>
+  <div class="links">
+    <a href="#overview">Overview</a>
+    <a href="#changes">Changes in v4</a>
+    <a href="#stack">Stack</a>
+    <a href="#invariants">Invariants</a>
+    <a href="#model">Data model</a>
+    <a href="#states">State machines</a>
+    <a href="#api">API</a>
+    <a href="#checkout">Checkout flow</a>
+    <a href="#locks">Lock order</a>
+    <a href="#recovery">Pending recovery</a>
+    <a href="#gateway">Fake gateway</a>
+    <a href="#idem">Idempotency</a>
+    <a href="#coupons">Coupons</a>
+    <a href="#money">Money</a>
+    <a href="#errors">Error model</a>
+    <a href="#report">Reporting</a>
+    <a href="#tests">Tests</a>
+    <a href="#layout">Code layout</a>
+    <a href="#scale">Multi-instance</a>
+    <a href="#deferred">Deferred</a>
+    <a href="#decisions">Decision log</a>
+    <a href="#decisions-md">DECISIONS.md outline</a>
+  </div>
+</nav>
+<main>
+
+<h1 id="overview">Checkout &amp; Rewards Service</h1>
+<p class="lede">How the system is built, which rules it must never break, and where each rule is enforced. Every open question is decided. The <a href="#decisions">decision log</a> records who made each call: <span class="tag user">Product</span> for product and behaviour calls, <span class="tag rev">Review</span> for technical calls taken from the architect, SDE2 and tester reviews.</p>
+
+<div class="grid2">
+  <div class="card"><strong>Core bet</strong><p>Use Postgres to enforce correctness: row locks, conditional updates and constraints. The application code orchestrates, and the database guarantees. The same design holds with one instance or ten.</p></div>
+  <div class="card"><strong>Payments, modelled honestly</strong><p>Checkout reserves stock and the coupon, calls a fake gateway outside any transaction, then confirms or releases. An unknown outcome is held. A reservation is released only once the gateway confirms that no charge can land.</p></div>
+</div>
+
+<h2 id="changes">Changes in v4</h2>
+<p class="muted">These are the fixes from the v3 review. None of the three reviewers found a correctness hole in the core design.</p>
+<ul>
+  <li><strong>The key's <code>state</code> column is gone.</strong> Once committed, every key has exactly one replay source: its order, or its stored response. That removes <code>completeKey</code>, two CHECKs, the <code>REQUEST_IN_PROGRESS</code> code, and the one key-lock exception in the lock order. A retry while a payment is in flight now gets a truthful 202 with the <code>orderId</code>, not a 409.</li>
+  <li><strong>Stock-holding orders trigger recovery.</strong> Checkout and PUT also recover stale orders that hold a product the request needs, so a stuck payment can't cause a final <code>INSUFFICIENT_STOCK</code>.</li>
+  <li><strong>The coupon preview</strong> returns the checkout error for a reserved or redeemed coupon, so it never shows a total that checkout would reject.</li>
+  <li><strong>Wiring:</strong> <code>createDb(config)</code> builds the pool, and <code>createApp({ config, gateway, db })</code> passes it to router factories with explicit dependencies. Error codes are defined once, in an <code>ERRORS</code> table. Coupon codes use an uppercase alphabet and one shared schema.</li>
+  <li><strong>Failure rules:</strong> reconcile and phase 0 continue past a failure on one order. 503 is listed on every route that can wait on a lock. The real-PSP mapping creates the PaymentIntent before confirming it.</li>
+  <li><strong>Tests:</strong>
+    <ul>
+      <li>The lock timeout is long by default, and only T15 and T17 use a short one.</li>
+      <li>A <code>holdLock</code> helper makes the 503 test possible.</li>
+      <li>T11 and T12 now assert what tells correct code from broken code.</li>
+      <li>Stub-gateway recovery tests are added.</li>
+      <li>An <code>it.each</code> covers the storage rule for every checkout code.</li>
+      <li>Barriers are added to T4, T8 and T9.</li>
+      <li>Losers settle before the idle-in-transaction check.</li>
+    </ul></li>
+</ul>
+
+<h2 id="stack">Stack</h2>
+<div class="table-wrap"><table>
+<tr><th>Layer</th><th>Choice</th><th>Why</th></tr>
+<tr><td>Runtime / HTTP</td><td>Node 22 + Hono</td><td>Small and explicit. <code>onError</code> owns the error envelope.</td></tr>
+<tr><td>Validation</td><td>Zod via a custom <code>zValidator</code> hook</td><td>One schema per param set, header set, query and body. The custom hook keeps failures inside the envelope.</td></tr>
+<tr><td>Database</td><td>PostgreSQL 16 (Docker Compose)</td><td>Real row locks and transactions, so the concurrency claims are tested rather than simulated.</td></tr>
+<tr><td>ORM / migrations</td><td>Drizzle</td><td>SQL-shaped queries. <code>.for('no key update')</code>, savepoints (nested <code>tx.transaction</code>) and conditional updates stay visible in the code.</td></tr>
+<tr><td>Payments</td><td><code>FakeGateway</code> behind a <code>PaymentGateway</code> interface</td><td>Stripe's test mode needs credentials, which the brief forbids. <code>stripe-mock</code> always returns success. See <a href="#gateway">Fake gateway</a>.</td></tr>
+<tr><td>Tests</td><td>Vitest against a real Postgres <code>checkout_test</code> database</td><td>Concurrency tests mean nothing against mocks.</td></tr>
+<tr><td>API docs</td><td>README tables + <code>requests.http</code></td><td>Executable examples, including the test tokens that trigger a decline or a timeout.</td></tr>
+</table></div>
+
+<h2 id="invariants">System invariants</h2>
+<p>Each invariant has one primary enforcement point, and a database backstop where one is cheap and real. The follow-up interview asks to "show where it is enforced", and this table is that answer. The <a href="#tests">test plan</a> names the test that goes red when each enforcement is removed.</p>
+<div class="table-wrap"><table>
+<tr><th>#</th><th>Invariant</th><th>Primary enforcement</th><th>Backstop</th><th>Test</th></tr>
+<tr><td>I1</td><td>Stock never goes below zero (no overselling)</td><td>Reserve locks the products in ID order, and checks stock before decrementing it</td><td><code>CHECK (stock &gt;= 0)</code></td><td>T1, T2</td></tr>
+<tr><td>I2</td><td>A cart has at most one live order (pending or paid)</td><td>Cart locked, and its status must be <code>open</code></td><td>Partial unique index on <code>orders(cart_id)</code> where not failed</td><td>T5</td></tr>
+<tr><td>I3</td><td>A retried checkout never creates a second order or charges twice</td><td>The key is claimed first, and its outcome is replayed. Gateway charges are idempotent per order ID</td><td><code>PK (key)</code>, <code>UNIQUE (order_id)</code></td><td>T3, T4, T30</td></tr>
+<tr><td>I4</td><td>A coupon is held by at most one live order, and redeemed at most once</td><td>Coupon locked, and its status must be <code>available</code></td><td>Partial unique index on <code>orders(coupon_id)</code> where not failed</td><td>T6</td></tr>
+<tr><td>I5</td><td>A checkout that fails before payment consumes nothing</td><td>Every check in reserve runs before its first write. The savepoint is defence in depth: removing it alone fails no test, and the mutation log records that</td><td>None needed</td><td>T21, T22</td></tr>
+<tr><td>I6</td><td>A declined or abandoned payment releases its stock, coupon and cart</td><td><code>finalizeOrder</code> releases all three in one transaction</td><td>None needed</td><td>T13, T15, T16</td></tr>
+<tr><td>I7</td><td>A reservation is never released while its charge could still land</td><td>Release happens only after a gateway decline, or after <code>cancel()</code> confirms nothing was charged</td><td>None needed</td><td>T12, T14, T31</td></tr>
+<tr><td>I8</td><td>A coupon's status agrees with its live order: <code>reserved</code> with a pending order, <code>redeemed</code> with a paid one</td><td>The coupon and the order change in the same transaction</td><td>None, because a CHECK can't span two rows. A CHECK only ties <code>redeemed_at</code> to the coupon's own status</td><td>T6, T13, T14</td></tr>
+<tr><td>I9</td><td>At most one coupon per milestone</td><td><code>UNIQUE (coupons.milestone)</code>. The advisory lock exists so that concurrent calls queue instead of returning false 409s</td><td>The same unique constraint</td><td>T9</td></tr>
+<tr><td>I10</td><td>Totals never go negative, <code>total = subtotal - discount</code>, and <code>discount = floor(subtotal * percent / 100)</code></td><td>Pure money function</td><td>CHECKs on each order and each line. <code>subtotal = sum(lines)</code> has none, since it spans rows</td><td>T27</td></tr>
+<tr><td>I11</td><td>An order still explains itself after products change</td><td>Order lines snapshot the name, unit price, quantity and line total. The order stores <code>percent_off</code></td><td><code>CHECK (line_total = unit_price * quantity)</code></td><td>T23</td></tr>
+<tr><td>I12</td><td>A cart can be changed only while it is <code>open</code></td><td>Cart mutations lock the cart and check its status</td><td>None needed</td><td>T24</td></tr>
+<tr><td>I13</td><td>An order leaves <code>pending_payment</code> exactly once, and <code>paid</code> and <code>failed</code> are terminal</td><td>The conditional update in <code>finalizeOrder</code></td><td>None needed</td><td>T10, T11</td></tr>
+<tr><td>I14</td><td>A committed key always has exactly one replay source: its order or its stored response</td><td>The claim and its outcome (<code>order_id</code> at step 8, or the stored error) are written in the same transaction</td><td><code>CHECK (order_id IS NULL OR response_status IS NULL)</code> rules out both at once</td><td>T16, T20</td></tr>
+<tr><td>I15</td><td>The report reconciles with orders and coupons, and reading it mutates nothing</td><td>Read-only <code>REPEATABLE READ</code> transaction. No GET resolves pending orders</td><td>None needed</td><td>T26</td></tr>
+</table></div>
+<p class="muted">Milestone counts only grow, because of I13: a paid order is never un-paid. Refunds would break this (see <a href="#deferred">Deferred</a>).</p>
+
+<h2 id="model">Data model</h2>
+<p>Money is an integer number of <strong>paise</strong> (INR), stored as <code>bigint</code> and read with Drizzle <code>{ mode: 'number' }</code>. Cart, order and coupon IDs are UUIDs. Product IDs are readable slugs. Every status column is <code>NOT NULL</code> with a <code>CHECK</code> listing its values. Every timestamp defaults to the database's <code>now()</code>.</p>
+<pre><code>products
+  id                text PK
+  name              text NOT NULL
+  price_paise       bigint NOT NULL CHECK (price_paise &gt;= 0)
+  stock             integer NOT NULL CHECK (stock &gt;= 0)
+  updated_at        timestamptz NOT NULL
+
+carts
+  id                uuid PK
+  status            text NOT NULL CHECK (status IN ('open','pending_payment','checked_out'))
+  created_at, updated_at
+
+cart_items
+  cart_id           uuid FK -&gt; carts
+  product_id        text FK -&gt; products
+  quantity          integer NOT NULL CHECK (quantity BETWEEN 1 AND 1000)
+  PRIMARY KEY (cart_id, product_id)
+
+orders
+  id                uuid PK
+  cart_id           uuid NOT NULL FK -&gt; carts
+  status            text NOT NULL CHECK (status IN ('pending_payment','paid','failed'))
+  subtotal_paise    bigint NOT NULL
+  discount_paise    bigint NOT NULL
+  total_paise       bigint NOT NULL CHECK (total_paise &gt;= 0)
+  coupon_id         uuid NULL FK -&gt; coupons
+  percent_off       integer NULL CHECK (percent_off BETWEEN 1 AND 100)
+  payment_ref       text NULL                   -- NULL for a zero total, which is never charged
+  failure_reason    text NULL
+  created_at        timestamptz NOT NULL        -- the TTL is measured from here
+  resolved_at       timestamptz NULL
+  CHECK (total_paise = subtotal_paise - discount_paise)
+  CHECK (discount_paise = COALESCE(subtotal_paise * percent_off / 100, 0))
+  CHECK ((coupon_id IS NULL) = (percent_off IS NULL))
+  CHECK ((status = 'pending_payment') = (resolved_at IS NULL))
+  CHECK ((status = 'failed') = (failure_reason IS NOT NULL))
+  CHECK (status &lt;&gt; 'paid' OR total_paise = 0 OR payment_ref IS NOT NULL)
+
+CREATE UNIQUE INDEX orders_live_cart_uq   ON orders (cart_id)   WHERE status &lt;&gt; 'failed';
+CREATE UNIQUE INDEX orders_live_coupon_uq ON orders (coupon_id) WHERE status &lt;&gt; 'failed';
+
+order_items
+  order_id          uuid FK -&gt; orders
+  product_id        text FK -&gt; products
+  product_name      text NOT NULL
+  unit_price_paise  bigint NOT NULL
+  quantity          integer NOT NULL CHECK (quantity BETWEEN 1 AND 1000)
+  line_total_paise  bigint NOT NULL
+  PRIMARY KEY (order_id, product_id)
+  CHECK (line_total_paise = unit_price_paise * quantity)
+
+coupons
+  id                uuid PK
+  code              text UNIQUE NOT NULL
+  milestone         integer UNIQUE NOT NULL     -- k-th milestone = paid order #k*n
+  percent_off       integer NOT NULL CHECK (percent_off BETWEEN 1 AND 100)
+  status            text NOT NULL CHECK (status IN ('available','reserved','redeemed'))
+  created_at        timestamptz NOT NULL
+  redeemed_at       timestamptz NULL
+  CHECK ((status = 'redeemed') = (redeemed_at IS NOT NULL))
+
+idempotency_keys
+  key               text PK
+  request_hash      text NOT NULL
+  order_id          uuid NULL UNIQUE FK -&gt; orders
+  response_status   integer NULL
+  response_body     jsonb NULL
+  created_at        timestamptz NOT NULL
+  CHECK ((response_status IS NULL) = (response_body IS NULL))
+  CHECK (order_id IS NULL OR response_status IS NULL)</code></pre>
+<ul class="muted">
+  <li><strong>The discount CHECK:</strong> Postgres integer division truncates, and for non-negative values that equals floor, so the CHECK matches the money function exactly.</li>
+  <li><strong>The partial unique indexes</strong> must be indexes, not table constraints. In Drizzle: <code>uniqueIndex('orders_live_cart_uq').on(t.cartId).where(sql`${t.status} &lt;&gt; 'failed'`)</code>. Read the generated SQL before committing the migration.</li>
+  <li><strong>A key with neither source</strong> exists only inside its own uncommitted claim. Step 8 sets <code>order_id</code>, a final failure stores the response, and anything else rolls the row back. "At least one source" can't be a CHECK, because the row is inserted before either exists.</li>
+  <li><strong>Cart items store no price:</strong> a cart's prices are always live, and the snapshot happens once, on the order.</li>
+</ul>
+
+<h3>Seed</h3>
+<div class="table-wrap"><table>
+<tr><th>id</th><th>name</th><th>price (paise)</th><th>stock</th></tr>
+<tr><td>p_keyboard</td><td>Mechanical Keyboard</td><td>499900</td><td>50</td></tr>
+<tr><td>p_mouse</td><td>Wireless Mouse</td><td>129950</td><td>100</td></tr>
+<tr><td>p_monitor</td><td>27" Monitor</td><td>1899900</td><td>20</td></tr>
+<tr><td>p_cable</td><td>USB-C Cable</td><td>34999</td><td>500</td></tr>
+<tr><td>p_lamp</td><td>Limited Edition Desk Lamp</td><td>249900</td><td><strong>3</strong> (limited)</td></tr>
+</table></div>
+<p class="muted">The odd paise values are deliberate. The cable at 34999 with 10% off gives a floor of 3499 where rounding would give 3500, so a <code>Math.round</code> slip fails a test.</p>
+
+<h2 id="states">State machines</h2>
+<div class="card">
+  <strong>Cart</strong>
+  <div class="sm"><span class="st">open</span><span class="arrow">: reserve :</span><span class="st">pending_payment</span><span class="arrow">: paid :</span><span class="st">checked_out</span></div>
+  <div class="sm"><span class="st">pending_payment</span><span class="arrow">: declined or abandoned :</span><span class="st">open</span></div>
+  <p class="muted">A business failure during reserve leaves the cart <code>open</code>. A decline reopens it with its items intact, so the client can fix it and pay again with a new key. The cart can be changed only while it is <code>open</code>. There is no expiry state (deferred).</p>
+</div>
+<div class="card">
+  <strong>Order</strong>
+  <div class="sm"><span class="st">pending_payment</span><span class="arrow">: approved :</span><span class="st">paid</span></div>
+  <div class="sm"><span class="st">pending_payment</span><span class="arrow">: declined, or cancelled by recovery :</span><span class="st">failed</span></div>
+  <p class="muted">An order exists only once reserve succeeds. <code>failed</code> orders are kept for audit and excluded from revenue and milestones. <code>paid</code> and <code>failed</code> are terminal (I13). A "successfully placed order" means <code>status = 'paid'</code>.</p>
+</div>
+<div class="card">
+  <strong>Coupon</strong>
+  <div class="sm"><span class="st">available</span><span class="arrow">: reserve :</span><span class="st">reserved</span><span class="arrow">: paid :</span><span class="st">redeemed</span></div>
+  <div class="sm"><span class="st">reserved</span><span class="arrow">: declined or abandoned :</span><span class="st">available</span></div>
+  <p class="muted">The coupon always moves together with the order that holds it (I8). A coupon is never lost to a checkout that fails.</p>
+</div>
+
+<h2 id="api">API</h2>
+<p>JSON over HTTP. Admin routes live under <code>/admin</code> and are unauthenticated by design (the brief allows it). Cart and order IDs are validated as UUIDs, and product IDs against <code>^p_[a-z0-9_]{1,60}$</code>, before anything reaches Postgres. A request with a body must be <code>application/json</code>.</p>
+<div class="table-wrap"><table>
+<tr><th>Method</th><th>Path</th><th>Purpose</th><th>Success</th><th>Errors</th></tr>
+<tr><td class="m GET">GET</td><td><code>/products</code></td><td>List products: <code>[{ id, name, pricePaise, stock }]</code></td><td>200</td><td>None</td></tr>
+<tr><td class="m POST">POST</td><td><code>/carts</code></td><td>Create an empty cart</td><td>201 cart view</td><td>None</td></tr>
+<tr><td class="m GET">GET</td><td><code>/carts/:id?couponCode=</code></td><td>The cart view. With <code>couponCode</code>, it previews the discount and total without reserving anything</td><td>200</td><td>400 VALIDATION_ERROR, 404 CART_NOT_FOUND, 422 COUPON_INVALID, 409 COUPON_RESERVED, 409 COUPON_ALREADY_REDEEMED</td></tr>
+<tr><td class="m PUT">PUT</td><td><code>/carts/:id/items/:productId</code></td><td><strong>Set</strong> the quantity, covering both add and change. <code>{ "quantity": 1..1000 }</code></td><td>201 if added, 200 if updated (cart view)</td><td>400 VALIDATION_ERROR, 404 CART_NOT_FOUND, 404 PRODUCT_NOT_FOUND, 409 CART_PAYMENT_PENDING, 409 CART_CHECKED_OUT, 409 INSUFFICIENT_STOCK, 503 LOCK_TIMEOUT</td></tr>
+<tr><td class="m DELETE">DELETE</td><td><code>/carts/:id/items/:productId</code></td><td>Remove a line. Removing a line that isn't there also succeeds</td><td>200 (cart view)</td><td>400 VALIDATION_ERROR, 404 CART_NOT_FOUND, 409 CART_PAYMENT_PENDING, 409 CART_CHECKED_OUT, 503 LOCK_TIMEOUT</td></tr>
+<tr><td class="m POST">POST</td><td><code>/carts/:id/checkout</code></td><td>Place the order. Header <code>Idempotency-Key</code> (required). Body <code>{ "expectedTotalPaise", "paymentToken", "couponCode"? }</code></td><td>201 paid order. 202 pending order, with <code>Retry-After: 5</code></td><td>400 VALIDATION_ERROR, 400 IDEMPOTENCY_KEY_INVALID, 402 PAYMENT_FAILED, 404 CART_NOT_FOUND, 409 CART_CHECKED_OUT, 409 CART_PAYMENT_PENDING, 409 INSUFFICIENT_STOCK, 409 PRICE_CHANGED, 409 COUPON_RESERVED, 409 COUPON_ALREADY_REDEEMED, 422 CART_EMPTY, 422 COUPON_INVALID, 422 IDEMPOTENCY_KEY_REUSED, 503 LOCK_TIMEOUT</td></tr>
+<tr><td class="m GET">GET</td><td><code>/orders/:id</code></td><td>The order view</td><td>200</td><td>400 VALIDATION_ERROR, 404 ORDER_NOT_FOUND</td></tr>
+<tr><td class="m POST">POST <span class="tag admin">admin</span></td><td><code>/admin/coupons</code></td><td>Generate a coupon for the oldest unrewarded milestone</td><td>201 <code>{ coupon, remainingEligible }</code></td><td>409 NO_ELIGIBLE_MILESTONE, 503 LOCK_TIMEOUT</td></tr>
+<tr><td class="m GET">GET <span class="tag admin">admin</span></td><td><code>/admin/coupons</code></td><td>List coupons and their status</td><td>200</td><td>None</td></tr>
+<tr><td class="m GET">GET <span class="tag admin">admin</span></td><td><code>/admin/orders?status=</code></td><td>List order views, optionally filtered by status, so the report can be reconciled</td><td>200</td><td>400 VALIDATION_ERROR</td></tr>
+<tr><td class="m GET">GET <span class="tag admin">admin</span></td><td><code>/admin/report</code></td><td>Sales and coupon summary</td><td>200</td><td>None</td></tr>
+<tr><td class="m POST">POST <span class="tag admin">admin</span></td><td><code>/admin/payments/reconcile</code></td><td>Resolve every pending order older than the TTL</td><td>200 <code>{ resolved: [{ orderId, status }], stillPending }</code></td><td>503 LOCK_TIMEOUT</td></tr>
+<tr><td class="m PATCH">PATCH <span class="tag admin">admin</span></td><td><code>/admin/products/:id</code></td><td>Change <code>pricePaise</code>, <code>name</code> or <code>stock</code>. The schema is strict and needs at least one field. <code>stock</code> means stock available to sell, so reserved units are not included</td><td>200</td><td>400 VALIDATION_ERROR, 404 PRODUCT_NOT_FOUND, 503 LOCK_TIMEOUT</td></tr>
+</table></div>
+
+<h3>Response shapes</h3>
+<pre><code>// cart view
+{ "id", "status", "orderId": null | "…",
+  "lines": [{ "productId", "name", "unitPricePaise", "quantity", "lineTotalPaise", "available" }],
+  "subtotalPaise",
+  "coupon": null | { "code", "percentOff" },
+  "discountPaise", "totalPaise" }
+
+// order view, used by GET /orders/:id, the 201 and 202 checkout responses, and every replay
+{ "id", "cartId", "status",
+  "lines": [{ "productId", "productName", "unitPricePaise", "quantity", "lineTotalPaise" }],
+  "subtotalPaise", "discountPaise", "totalPaise",
+  "coupon": null | { "code", "percentOff" },
+  "paymentRef", "failureReason", "createdAt", "resolvedAt" }
+
+// 402: the error envelope
+{ "error": { "code": "PAYMENT_FAILED", "message", "details": { "orderId", "reason" } } }</code></pre>
+<ul class="muted">
+  <li><code>available</code> is <code>stock &gt;= quantity</code> right now.</li>
+  <li><strong>The cart's <code>totalPaise</code></strong> is exactly what checkout will accept as <code>expectedTotalPaise</code>. Without a coupon it equals the subtotal. With one, the preview succeeds only for an <code>available</code> coupon, and otherwise returns the same error checkout would.</li>
+  <li><strong>Checked-out carts</strong> still list their lines at <em>live</em> prices. <code>orderId</code> points to the order that recorded what was charged.</li>
+  <li><strong>Loading an order:</strong> <code>loadOrderView(db, orderId)</code> joins the order's items and its coupon.</li>
+  <li><strong>The checkout status code:</strong> <code>toCheckoutResponse(view)</code> picks it from the order's status: 201 paid, 202 pending, 402 failed. The first response and every replay go through it.</li>
+  <li><strong>Polling a 202:</strong> re-POST the checkout with the same key. That replays the current state and runs recovery once the TTL has passed. <code>GET /orders/:id</code> never resolves anything.</li>
+</ul>
+
+<div class="card">
+<strong>Why PUT to set a quantity, and an idempotent DELETE</strong> <span class="tag user">Product</span>
+<p>"Add 1 keyboard" sent twice because of a timeout produces 2 keyboards. "Set the keyboard quantity to 1" sent twice still produces 1. A DELETE of a line that is already gone returns 200 with the cart, for the same reason. Every cart mutation is retry-safe, so only checkout needs an explicit key. The README maps the brief's "add" and "change" to PUT. The 201/200 split comes from a plain SELECT, made while the cart lock is held, followed by an INSERT or an UPDATE.</p>
+</div>
+
+<h2 id="checkout">The checkout flow</h2>
+<div class="card">
+<strong>The pattern: idempotency keys with atomic phases</strong>
+<p>This is the shape Stripe uses, as written up by Brandur Leach. <em>Atomic phases</em> are local transactions placed between calls to a foreign system: here, reserve and finalize around the gateway charge. Stock and the coupon are held as a <em>reservation</em>, then confirmed or released by a compensating step (a single-process saga, sometimes called Try/Confirm/Cancel).</p>
+<p>Our <a href="#recovery">pending recovery</a> is a <em>reconciler</em>. Brandur's completer rolls forward by re-driving the charge from a recovery point. Ours asks the gateway what happened, then rolls forward if the charge was approved, or cancels and rolls back if it wasn't. We roll back rather than re-drive because the payment token is never stored. The <code>pending_payment</code> order row is the durable record of the intent to charge, so a crash at any point leaves something recovery can resolve.</p>
+</div>
+<div class="table-wrap"><table>
+<tr><th>Option</th><th>Shape</th><th>Why not / why</th></tr>
+<tr><td>No payment step</td><td>A commit counts as paid</td><td>The brief's simplest option, but it can't show a coupon surviving a failed payment.</td></tr>
+<tr><td><strong>Atomic phases + reservation + reconciler (chosen)</strong></td><td>One synchronous request. Recovery handles crashes and unknown outcomes</td><td>It covers every failure the brief names, with no worker and no broker.</td></tr>
+<tr><td>Transactional outbox + worker</td><td>Reserve writes an outbox row, and a relay process charges and finalizes</td><td>The outbox solves writing to the database <em>and</em> publishing to a message broker atomically. We have no broker and no consumers. It needs an always-on relay, it makes checkout asynchronous (always 202, then poll), and its relay can publish twice. The pending order row already records the intent.</td></tr>
+<tr><td>Workflow engine (Temporal, a saga orchestrator)</td><td>Durable multi-step workflows</td><td>A correct pattern for a much bigger problem than ours.</td></tr>
+</table></div>
+
+<p>Checkout is one synchronous request in three phases. The payment call sits <strong>between</strong> two transactions, because a network call must never hold row locks, and a charge must never happen inside a transaction that could still roll back. Both transactions run at <code>READ COMMITTED</code>. Every explicit row lock is <code>FOR NO KEY UPDATE</code>: we only ever update non-key columns, and this mode doesn't block the <code>FOR KEY SHARE</code> lock that FK inserts take (for example, adding a lamp to a cart while another cart checks a lamp out). The one stronger lock is implicit: step 8 sets the UNIQUE <code>order_id</code> on the request's own key row, which takes <code>FOR UPDATE</code> on a row no other transaction can see yet.</p>
+
+<div class="phase">Phase 0: before any transaction</div>
+<ol class="steps">
+  <li data-n="0"><strong>Parse</strong> the params, the <code>idempotency-key</code> header and the body with zod. <code>couponCode</code> goes through the shared <code>couponCodeSchema</code> (trim, uppercase), so <code>save10-…</code> and <code>SAVE10-…</code> are the same request.
+    <div class="fail">400 VALIDATION_ERROR or 400 IDEMPOTENCY_KEY_INVALID. Nothing is stored, so the key stays unused.</div></li>
+  <li data-n="0"><strong>Recover</strong> stale pending orders on this cart, holding this coupon, or holding any product in this cart (see <a href="#recovery">Pending recovery</a>). This never runs inside a transaction. If recovering one of these orders fails, the failure is logged and checkout continues. Its own checks then decide the response.</li>
+</ol>
+
+<div class="phase">Phase 1: reserve (transaction 1, <code>reservePhase(db, input, key, hash)</code>)</div>
+<ol class="steps">
+  <li data-n="1"><strong>Claim the key:</strong> <code>INSERT … ON CONFLICT (key) DO NOTHING RETURNING key</code>. An empty result means a conflict. A request racing on the same key waits here until the first one's transaction ends. Because this is the first statement, a waiting request holds no other lock.
+    <div class="fail">On a conflict, load the row in a <em>separate</em> statement, which then sees the committed row. Hash differs: 422 IDEMPOTENCY_KEY_REUSED. Has an order: replay it from its current state. Has a stored response: replay that response. Nothing was written, so roll back and return.</div></li>
+  <li data-n="2"><strong>Open a savepoint</strong>, then <strong>lock the cart</strong> with <code>FOR NO KEY UPDATE</code>.
+    <div class="fail">Missing: 404 CART_NOT_FOUND <span class="tag final">final</span>. <code>checked_out</code>: 409 CART_CHECKED_OUT <span class="tag final">final</span>, with <code>orderId</code>. <code>pending_payment</code>: 409 CART_PAYMENT_PENDING <span class="tag trans">transient</span>, with <code>orderId</code>.</div></li>
+  <li data-n="3"><strong>Load the lines.</strong> <div class="fail">None: 422 CART_EMPTY <span class="tag final">final</span>.</div></li>
+  <li data-n="4"><strong>Lock the products:</strong> <code>SELECT … WHERE id = ANY($1) ORDER BY id FOR NO KEY UPDATE</code>. Postgres takes the row locks after the sort, so they are taken in ID order.
+    <div class="fail">Any line where stock &lt; quantity: 409 INSUFFICIENT_STOCK <span class="tag final">final</span>, with <code>details: [{ productId, requested, available }]</code> for every short line. This stays final even when another payment that is still in flight holds the units. Only cart and coupon holds are transient.</div></li>
+  <li data-n="5"><strong>Price the cart</strong> at the current prices, using <code>money.ts</code>.</li>
+  <li data-n="6"><strong>Coupon (if given):</strong> lock it by code.
+    <div class="fail">Unknown: 422 COUPON_INVALID <span class="tag final">final</span>. <code>redeemed</code>: 409 COUPON_ALREADY_REDEEMED <span class="tag final">final</span>. <code>reserved</code>: 409 COUPON_RESERVED <span class="tag trans">transient</span>.</div></li>
+  <li data-n="7"><strong>Price guard:</strong> the required <code>expectedTotalPaise</code> must equal the computed total.
+    <div class="fail">409 PRICE_CHANGED <span class="tag final">final</span>, with <code>details: { subtotalPaise, discountPaise, totalPaise }</code>.</div></li>
+  <li data-n="8"><strong>Write:</strong> decrement stock, insert the <code>pending_payment</code> order and its line snapshots, set the coupon to <code>reserved</code>, set the cart to <code>pending_payment</code>, and set <code>key.order_id</code>. Release the savepoint and <strong>commit</strong>.</li>
+</ol>
+<p><span class="tag final">final</span> errors roll back the savepoint, store <code>toErrorBody(err)</code> on the key, commit, and only then are returned. That is what makes a business failure the key's final answer, and the savepoint guarantees that none of reserve's writes survive with it. <span class="tag trans">transient</span> errors, a 500 and a 503 roll back the whole transaction, key claim included, so the same key can be retried. Each code's status and final flag are defined once, in the <code>ERRORS</code> table in <code>errors.ts</code>.</p>
+<pre><code>const outcome = await db.transaction(async (tx) =&gt; {
+  const claim = await claimKey(tx, key, hash);          // throws 422, or returns a replay
+  if (claim.kind === 'replay') return claim;
+  try {
+    const order = await tx.transaction((sp) =&gt; reserve(sp, input, key));   // savepoint
+    return { kind: 'reserved', order };
+  } catch (err) {
+    if (!(err instanceof AppError) || !err.final) throw err;               // rolls back the claim too
+    await completeKeyWithError(tx, key, err);
+    return { kind: 'rejected', error: err };
+  }
+});
+if (outcome.kind === 'rejected') throw outcome.error;   // after COMMIT</code></pre>
+
+<div class="phase">Phase 2: charge (no transaction, no connection held)</div>
+<ol class="steps">
+  <li data-n="9">A zero total (a 100% coupon) skips the gateway and counts as approved, with no <code>payment_ref</code>. Otherwise, call <code>gateway.charge({ orderId, amountPaise, paymentToken }, AbortSignal.timeout(GATEWAY_TIMEOUT_MS))</code>. The result is <em>approved</em>, <em>declined(reason)</em>, or <em>unknown</em> (any thrown error, including the timeout).</li>
+</ol>
+
+<div class="phase">Phase 3: finalize (transaction 2)</div>
+<ol class="steps">
+  <li data-n="10"><strong>Approved or declined:</strong> <code>finalizeOrder(orderId, resolution)</code>, the same function recovery uses:
+    <div class="fail">Read the order's <code>cart_id</code>, which never changes. Lock the cart. Then claim the order with <code>UPDATE orders SET status = … WHERE id = $1 AND status = 'pending_payment'</code>. If no row changed, something else already resolved it, so stop.<br>
+    <strong>Approved:</strong> order <code>paid</code>, coupon <code>redeemed</code>, cart <code>checked_out</code>.<br>
+    <strong>Declined:</strong> order <code>failed</code>. Lock the products in ID order, then add the quantities back. Coupon <code>available</code>, cart <code>open</code>.<br>
+    Commit. The key needs no change, because it already points to the order.</div></li>
+  <li data-n="11"><strong>Unknown:</strong> nothing to write. The order stays pending and holds its reservation.</li>
+  <li data-n="12"><strong>Respond:</strong> <code>toCheckoutResponse(await loadOrderView(db, orderId))</code>, built from the order as it is <em>now</em>: 201 paid, 202 pending, or 402 PAYMENT_FAILED. So if recovery got there first, the client still sees the truth.</li>
+</ol>
+<p class="muted">If phase 3 itself fails with a 500 or 503 after the charge, the order stays pending. The key already points to it, so retries replay a 202 until the TTL passes. Then recovery resolves the order from the gateway's record, and the next retry replays the outcome.</p>
+
+<h3>Why pessimistic locks</h3>
+<div class="table-wrap"><table>
+<tr><th>Option</th><th>For</th><th>Against</th></tr>
+<tr><td><strong>Row locks (chosen)</strong></td><td>Deterministic and explainable line by line. No retry loops. Contention is per product, which is fine at store scale.</td><td>Locks are held for the length of the transaction. A hot product serializes its reserve phases, though never its payment calls.</td></tr>
+<tr><td>Conditional update only (<code>SET stock = stock - q WHERE stock &gt;= q</code>)</td><td>No explicit locks, and fast.</td><td>A multi-line cart needs a rollback when line 3 fails after lines 1 and 2 succeeded, and it can't report every shortage at once.</td></tr>
+<tr><td><code>SERIALIZABLE</code> + retry</td><td>The database finds the conflicts itself.</td><td>Serialization failures need a retry loop that has to be written and tested. Harder to predict in an interview.</td></tr>
+<tr><td>Optimistic version columns</td><td>No lock waits.</td><td>The same retry burden. Under contention for limited stock, most attempts fail and retry.</td></tr>
+<tr><td>In-process mutex</td><td>Trivial.</td><td>Breaks the moment there are two instances, which is exactly the question the brief asks.</td></tr>
+</table></div>
+<p class="muted"><code>READ COMMITTED</code> is deliberate. After a lock wait, the waiter re-reads the newest row version and sees <code>pending_payment</code> or <code>reserved</code>, with no serialization error. At <code>REPEATABLE READ</code> those same points would raise 40001.</p>
+
+<h2 id="locks">Lock order</h2>
+<div class="table-wrap"><table>
+<tr><th>Transaction</th><th>Locks, in order</th></tr>
+<tr><td>Reserve</td><td>key (insert) → cart → products by ID → coupon. Step 8 then updates its own key row</td></tr>
+<tr><td><code>finalizeOrder</code></td><td>cart → order → products by ID (declines only) → coupon</td></tr>
+<tr><td>Cart PUT / DELETE</td><td>cart (then the <code>cart_items</code> write, whose FK check takes <code>KEY SHARE</code> on the product, which never conflicts)</td></tr>
+<tr><td>Coupon generation</td><td>advisory lock → coupon insert</td></tr>
+<tr><td>PATCH product</td><td>the product row</td></tr>
+</table></div>
+<p><strong>Why nothing can deadlock.</strong> Every transaction that takes more than one row lock takes cart, then products by ID, then coupon, in that relative order. The key row can't be part of a cycle, for two reasons:</p>
+<ul>
+  <li>Only the reserve that inserted a key ever writes to it. Nothing writes a key after its transaction commits.</li>
+  <li>A conflicting claim takes no row lock. <code>ON CONFLICT DO NOTHING</code> waits only while an insert of the same key is still uncommitted, and at that moment the claim is the waiter's first statement, so the waiter holds nothing.</li>
+</ul>
+<p><code>lock_timeout</code> is set on the pool (<code>new Pool({ lock_timeout })</code>, from <code>LOCK_TIMEOUT_MS</code>, default 5 seconds). It covers every lock wait, including the claim and the advisory lock. A timeout becomes 503 LOCK_TIMEOUT.</p>
+
+<h2 id="recovery">Pending recovery</h2>
+<p>A pending order can come from an unknown outcome (a 202), from a crash between reserve and finalize, or from a phase 3 failure. In each case it holds stock and maybe a coupon. Once it is older than <code>PAYMENT_PENDING_TTL_SECONDS</code> (compared with <code>now()</code> in SQL against <code>orders.created_at</code>), <code>resolvePendingOrder(orderId)</code> can resolve it:</p>
+<ol class="steps">
+  <li data-n="1"><strong>Zero total:</strong> the order was never going to be charged, so resolve it as <em>approved</em> without calling the gateway.</li>
+  <li data-n="2"><strong>Otherwise, ask the gateway:</strong> <code>gateway.retrieve(orderId)</code>, outside any transaction.
+    <div class="fail"><strong>Approved or declined:</strong> that is the resolution.<br>
+    <strong>Not found:</strong> call <code>gateway.cancel(orderId)</code>. It returns <em>cancelled</em>, and from then on any late <code>charge()</code> for this order is declined. Or, if the charge landed in between, it returns that charge's result. Cancelled resolves as <em>declined</em>, with reason <code>abandoned</code>.<br>
+    <strong>The gateway throws:</strong> leave the order pending and try again later.</div></li>
+  <li data-n="3"><code>finalizeOrder(orderId, resolution)</code>. Its conditional update makes every race safe: recovery against the original phase 3, and two recoveries at once, both change the order exactly once (I13).</li>
+</ol>
+<div class="table-wrap"><table>
+<tr><th>Triggered by</th><th>Which stale orders</th><th>When</th></tr>
+<tr><td><code>POST /carts/:id/checkout</code></td><td>The one on this cart, the one holding this coupon, and any holding a product in this cart. This also covers the key's own order, since a matching hash means the same cart</td><td>Phase 0, before the reserve transaction</td></tr>
+<tr><td><code>PUT</code> on a cart item</td><td>The one on that cart, and any holding that product (its soft stock check reads stock)</td><td>Before the mutation's transaction. If the cart is still pending afterwards, 409 CART_PAYMENT_PENDING</td></tr>
+<tr><td><code>DELETE</code> on a cart item</td><td>The one on that cart</td><td>Before the mutation's transaction</td></tr>
+<tr><td><code>POST /admin/payments/reconcile</code></td><td>Every stale order. Orders younger than the TTL are left alone. A failure on one order is caught, that order stays pending, and it is counted in <code>stillPending</code></td><td>On request</td></tr>
+<tr><td><strong>Never:</strong> any <code>GET</code>, including the report, the coupon preview and <code>GET /orders/:id</code></td><td>None</td><td>GET stays safe, and the brief says repeated report requests must not mutate state (I15)</td></tr>
+</table></div>
+<pre><code>type StaleScope =
+  | { scope: 'all' }
+  | { scope: 'request'; cartId: string; couponCode?: string; productIds: string[] }
+
+findStalePending(db, ttl, s):
+  orders o LEFT JOIN coupons c ON c.id = o.coupon_id
+  WHERE o.status = 'pending_payment'
+    AND o.created_at &lt; now() - make_interval(secs =&gt; $ttl)
+    AND ( s.scope = 'all'
+       OR o.cart_id = $cartId
+       OR c.code = $couponCode
+       OR EXISTS (SELECT 1 FROM order_items oi WHERE oi.order_id = o.id AND oi.product_id = ANY($productIds)) )</code></pre>
+<p class="muted">The scope is a discriminated union, so a caller that forgets a filter fails to compile. Without it, the call would silently resolve every stale order. Recovery never holds a connection while it waits on the gateway, and it never runs inside another transaction: run inside a PUT's transaction, it would wait on the cart lock that transaction already holds. The cancel step is what makes I7 independent of timing. A charge slower than the TTL is declined rather than landing on stock that was already released.</p>
+
+<h2 id="gateway">Fake gateway</h2>
+<p>There is no off-the-shelf fake. Stripe's test mode needs a secret key, network access and an account, and the brief forbids depending on private services or credentials. It is also rate limited and can't produce a timeout on demand. <code>stripe-mock</code> is offline but stateless, and its README says it returns success instead of errors. Stripe's own guidance for automated tests is to mock the gateway's responses. So we write a small fake, shaped like Stripe:</p>
+<pre><code>interface PaymentGateway {
+  charge(input: { orderId: string; amountPaise: number; paymentToken: string }, signal: AbortSignal): Promise&lt;ChargeResult&gt;
+  retrieve(orderId: string): Promise&lt;ChargeResult | { outcome: 'not_found' }&gt;
+  cancel(orderId: string): Promise&lt;ChargeResult | { outcome: 'cancelled' }&gt;
+}
+type ChargeResult =
+  | { outcome: 'approved'; paymentRef: string }
+  | { outcome: 'declined'; reason: string }
+
+type Resolution =
+  | { outcome: 'approved'; paymentRef: string | null }
+  | { outcome: 'declined'; reason: string }</code></pre>
+<p class="muted"><code>charge()</code> throwing means the outcome is unknown. <code>Resolution</code> is what <code>finalizeOrder</code> takes: <code>paymentRef</code> is <code>null</code> for a zero total, and recovery maps <em>cancelled</em> to declined with reason <code>abandoned</code>. The gateway is a typed in-process interface, so its results are not zod-parsed. A real HTTP adapter would parse them at its own boundary.</p>
+<div class="table-wrap"><table>
+<tr><th><code>paymentToken</code></th><th><code>charge()</code></th><th><code>retrieve()</code> afterwards</th></tr>
+<tr><td><code>pm_card_visa</code></td><td>approved</td><td>approved</td></tr>
+<tr><td><code>pm_card_chargeDeclined</code></td><td>declined, <code>card_declined</code></td><td>declined</td></tr>
+<tr><td><code>pm_card_chargeDeclinedInsufficientFunds</code></td><td>declined, <code>insufficient_funds</code></td><td>declined</td></tr>
+<tr><td><code>tok_timeout_approved</code></td><td>records approved, then throws a timeout</td><td>approved</td></tr>
+<tr><td><code>tok_timeout_declined</code></td><td>records declined, then throws a timeout</td><td>declined</td></tr>
+<tr><td>anything else</td><td>declined, <code>invalid_payment_method</code></td><td>declined</td></tr>
+<tr><td><em>any token, after <code>cancel()</code></em></td><td>declined, <code>cancelled</code>. Nothing is charged</td><td>declined</td></tr>
+</table></div>
+<ul>
+  <li>The <code>pm_card_*</code> names are Stripe's own test tokens. The <code>tok_timeout_*</code> names are ours, because Stripe has no equivalent.</li>
+  <li>Charges are stored in an in-memory <code>Map</code> keyed by <code>orderId</code>. A repeated <code>charge()</code> returns the recorded result, so nothing is charged twice. <code>cancel()</code> writes a tombstone if nothing is recorded yet, or returns the recorded result if a charge exists. Each operation is a synchronous check-and-set on the map, so the two can't interleave.</li>
+  <li>Restarting the process loses the records, so <code>retrieve()</code> returns <code>not_found</code> and recovery cancels and releases. That is acceptable for a fake, and documented.</li>
+  <li><strong>Test-only control lives in <code>test/helpers/gate.ts</code></strong>, not in the source. It is a decorator: <code>gated(fake, { at: 'before' | 'after' })</code> holds <code>charge()</code> either before the fake records the charge or after. It exposes an <code>entered</code> promise and a <code>release()</code> function, and it honours the abort signal.</li>
+</ul>
+
+<h2 id="idem">Idempotency</h2>
+<ul>
+  <li><code>Idempotency-Key</code> is <strong>required</strong>, 1–255 characters. A missing, empty or over-long key gets 400 IDEMPOTENCY_KEY_INVALID.</li>
+  <li><code>request_hash</code> = SHA-256 of <code>JSON.stringify([cartId, couponCode ?? null, expectedTotalPaise, paymentToken])</code>, computed on the values after zod has parsed and normalised them. Because the cart ID is part of the hash, a key reused on another cart is a mismatch.</li>
+  <li>Keys are global (there is no auth to scope them by) and are kept forever. Both are deferred.</li>
+  <li><strong>The rule</strong> follows Stripe. Once a request has <em>begun executing</em>, its outcome is final. Requests that fail validation, or that conflict with another payment still in flight over the same cart or coupon, store nothing.</li>
+</ul>
+<div class="table-wrap"><table>
+<tr><th>Situation</th><th>Result</th><th>Stored?</th></tr>
+<tr><td>First request</td><td>Executes: 201, 202, 402, or a final business error</td><td>Yes: the order, or the response</td></tr>
+<tr><td>Retry, where the key has an order (including a retry while the payment call is still running)</td><td>The order's <em>current</em> state, with header <code>Idempotent-Replayed: true</code>: pending is 202, paid is 201, failed is 402</td><td>No</td></tr>
+<tr><td>Retry, where the key has a stored response</td><td><strong>The same status and body</strong>, with the replay header</td><td>No</td></tr>
+<tr><td>Retry while the first request's reserve transaction is still open</td><td>Waits on the claim. Then it replays, or executes normally if that transaction rolled back</td><td>No</td></tr>
+<tr><td>Same key with a different cart, coupon, token or total</td><td>422 IDEMPOTENCY_KEY_REUSED. Two carts racing on one key: the second waits on the claim, then gets 422. Never a 500</td><td>No</td></tr>
+<tr><td>A 400 validation failure</td><td>The key is still unused</td><td>No</td></tr>
+<tr><td>A transient conflict: CART_PAYMENT_PENDING or COUPON_RESERVED</td><td>The same key can succeed once the hold clears</td><td>No</td></tr>
+<tr><td>A 500 or 503 during reserve</td><td>Rolled back, including the key. A retry re-executes</td><td>No</td></tr>
+<tr><td>A 500 or 503 during finalize, or a crash after reserve</td><td>The order stays pending. Retries replay 202 until the TTL. Then phase 0 recovers the order, and the retry replays 201 or 402</td><td>Yes (the key already points to the order)</td></tr>
+<tr><td>A final business failure (out of stock, price changed, invalid coupon, empty cart), retried with the same key after a fix</td><td>The same error again. A new key is needed</td><td>Yes</td></tr>
+<tr><td>Payment declined, retried with the same key</td><td>402 again. The cart is open, so a new key can pay</td><td>Yes</td></tr>
+<tr><td>A different key on a checked-out cart</td><td>409 CART_CHECKED_OUT, with <code>orderId</code></td><td>Yes</td></tr>
+</table></div>
+
+<h2 id="coupons">Coupons</h2>
+<div class="card">
+<strong>Configuration</strong>, read from the environment and validated with zod at boot:
+<ul>
+  <li><code>COUPON_EVERY_N_ORDERS</code> (n): an integer ≥ 1</li>
+  <li><code>COUPON_PERCENT_OFF</code> (x): an integer from 1 to 100</li>
+  <li><code>PAYMENT_PENDING_TTL_SECONDS</code>: default 300</li>
+  <li><code>GATEWAY_TIMEOUT_MS</code>: default 10000</li>
+  <li><code>LOCK_TIMEOUT_MS</code>: default 5000</li>
+  <li><code>DATABASE_URL</code>, <code>PORT</code></li>
+</ul>
+The schema rejects a TTL below 10 × the gateway timeout.
+</div>
+<h3>Milestones</h3>
+<pre><code>paid_orders        = COUNT(orders WHERE status = 'paid')
+reached_milestones = floor(paid_orders / n)
+next_milestone     = COALESCE(MAX(coupons.milestone), 0) + 1
+eligible           = next_milestone &lt;= reached_milestones</code></pre>
+<p>Generation runs in one transaction that starts with <code>pg_advisory_xact_lock(&lt;constant&gt;)</code>, so concurrent generations queue rather than all computing the same milestone. Five parallel calls with two unrewarded milestones produce two coupons and three 409s, not one coupon and four false 409s. <code>UNIQUE (milestone)</code> is the guarantee (I9). Reading the count at <code>READ COMMITTED</code> is safe because paid orders are never un-paid (I13), so a stale count can only <em>under</em>-report eligibility.</p>
+<p class="muted">Milestones come from the count of paid orders, not from a sequence. A Postgres sequence leaves gaps when a transaction rolls back, so it would count failed checkouts.</p>
+<p class="muted"><strong>Codes</strong> take the form <code>SAVE{x}-M{k}-{8 chars}</code>. The 8 characters come from the uppercase Crockford base32 alphabet, so a code survives the shared <code>couponCodeSchema</code> (trim, uppercase) that the checkout body, the preview query and <code>findStalePending</code> all use. They are inserted with <code>ON CONFLICT (code) DO NOTHING</code>, and a collision retries with a fresh suffix, up to 3 times. The random part means a bearer code can't be guessed from its milestone.</p>
+
+<h3>Semantics</h3>
+<div class="table-wrap"><table>
+<tr><th>Question</th><th>Choice</th><th></th></tr>
+<tr><td>Who can use a coupon?</td><td>Anyone holding the code (a bearer coupon). There is no customer identity to tie it to.</td><td><span class="tag user">Product</span></td></tr>
+<tr><td>Several milestones are unrewarded</td><td>Each call generates one coupon, for the oldest unrewarded milestone. Nothing lapses. The response includes <code>remainingEligible</code>.</td><td><span class="tag user">Product</span></td></tr>
+<tr><td>Which orders count toward milestones?</td><td>Every <strong>paid</strong> order, discounted or not. Pending and failed orders don't count.</td><td><span class="tag user">Product</span></td></tr>
+<tr><td>Nothing is eligible</td><td>409 NO_ELIGIBLE_MILESTONE, with <code>{ paidOrders, nextMilestoneAt }</code> in details.</td><td><span class="tag user">Product</span></td></tr>
+<tr><td>Seeing the discounted total</td><td><code>GET /carts/:id?couponCode=</code> previews it without reserving anything. An unavailable coupon returns the same error checkout would.</td><td><span class="tag user">Product</span></td></tr>
+<tr><td>Coupons per order</td><td>At most one.</td><td><span class="tag rev">Review</span></td></tr>
+<tr><td>Config x changes later</td><td>Existing coupons keep the <code>percent_off</code> frozen when they were generated.</td><td><span class="tag rev">Review</span></td></tr>
+<tr><td>Config n changes later</td><td>Deferred. It would re-map past milestones.</td><td><span class="tag rev">Review</span></td></tr>
+<tr><td>Expiry</td><td>None.</td><td><span class="tag rev">Review</span></td></tr>
+<tr><td>Coupon held by a pending order</td><td>409 COUPON_RESERVED. It is transient: the coupon may become available again if that payment fails.</td><td><span class="tag rev">Review</span></td></tr>
+</table></div>
+
+<h2 id="money">Money and rounding</h2>
+<ul>
+  <li>Money is an integer number of paise, end to end. No float appears in any money path. The API sends <code>*Paise</code> integers only.</li>
+  <li>Every paise column is <code>bigint</code>, read with <code>{ mode: 'number' }</code>. Aggregates are cast with <code>::bigint</code> and <code>.mapWith(Number)</code>, because node-postgres returns <code>int8</code> and <code>numeric</code> as strings. Capping quantity at 1000 keeps every value far below 2<sup>53</sup>.</li>
+  <li><code>line_total = unit_price * quantity</code>, and <code>subtotal = sum(line_totals)</code>. These are exact.</li>
+  <li><code>discount = floor(subtotal * percent_off / 100)</code>, in integer arithmetic. One rounding step, applied once, at order level. It always rounds down, so it favours the store by under one paisa, and the same inputs always give the same result. The cart preview uses the same function.</li>
+  <li><code>total = subtotal - discount</code>. With <code>percent_off &lt;= 100</code> the total is never negative, and CHECKs back that up (I10). A total of 0 is never charged.</li>
+  <li>Allocating the discount to individual lines (needed for partial refunds) is deferred.</li>
+</ul>
+
+<h2 id="errors">Error model</h2>
+<pre><code>{ "error": { "code": "INSUFFICIENT_STOCK",
+             "message": "Not enough stock for 1 item",
+             "details": [{ "productId": "p_lamp", "requested": 2, "available": 1 }] } }</code></pre>
+<p>The <code>code</code> is a stable contract that clients branch on, the <code>message</code> is for humans, and <code>details</code> carries what a client needs to recover. The HTTP status gives the class of problem: <strong>400</strong> for a malformed request, <strong>402</strong> for a failed payment, <strong>404</strong> for an unknown resource in the path, <strong>409</strong> for a conflict with current state, <strong>422</strong> for a well-formed request that is semantically invalid, and <strong>503</strong> for a transient condition that is safe to retry. The <em>Checkout key</em> column says what happens to the idempotency key when checkout returns that error.</p>
+<div class="table-wrap"><table>
+<tr><th>Status</th><th>Code</th><th>When</th><th>Checkout key</th></tr>
+<tr><td>400</td><td>VALIDATION_ERROR</td><td>Bad params, query or body: quantity outside 1–1000, a malformed ID, a missing <code>expectedTotalPaise</code>, malformed JSON, a non-JSON Content-Type, an empty PATCH</td><td>Not stored</td></tr>
+<tr><td>400</td><td>IDEMPOTENCY_KEY_INVALID</td><td>The checkout header is missing, empty, or over 255 characters</td><td>Not stored</td></tr>
+<tr><td>402</td><td>PAYMENT_FAILED</td><td>Declined by the gateway, or abandoned. <code>details: { orderId, reason }</code></td><td>Replayed from the order</td></tr>
+<tr><td>404</td><td>CART_NOT_FOUND</td><td>Unknown cart</td><td><span class="tag final">final</span></td></tr>
+<tr><td>404</td><td>PRODUCT_NOT_FOUND / ORDER_NOT_FOUND</td><td>Unknown ID in the path</td><td>n/a</td></tr>
+<tr><td>404</td><td>NOT_FOUND</td><td>Unknown route</td><td>n/a</td></tr>
+<tr><td>409</td><td>CART_CHECKED_OUT</td><td>Changing or checking out a checked-out cart. <code>details: { orderId }</code></td><td><span class="tag final">final</span></td></tr>
+<tr><td>409</td><td>CART_PAYMENT_PENDING</td><td>Changing or checking out a cart whose payment is pending. <code>details: { orderId }</code></td><td><span class="tag trans">transient</span></td></tr>
+<tr><td>409</td><td>INSUFFICIENT_STOCK</td><td>At add time (a soft check) or at checkout (authoritative), including when a payment that is still in flight holds the units</td><td><span class="tag final">final</span></td></tr>
+<tr><td>409</td><td>PRICE_CHANGED</td><td><code>expectedTotalPaise</code> does not match the computed total. <code>details</code> has the new breakdown</td><td><span class="tag final">final</span></td></tr>
+<tr><td>409</td><td>COUPON_RESERVED</td><td>The coupon is held by a pending payment, at checkout or in the preview</td><td><span class="tag trans">transient</span></td></tr>
+<tr><td>409</td><td>COUPON_ALREADY_REDEEMED</td><td>The coupon is already used, at checkout or in the preview</td><td><span class="tag final">final</span></td></tr>
+<tr><td>409</td><td>NO_ELIGIBLE_MILESTONE</td><td>Coupon generation with nothing unrewarded</td><td>n/a</td></tr>
+<tr><td>422</td><td>CART_EMPTY</td><td>Checkout of an empty cart</td><td><span class="tag final">final</span></td></tr>
+<tr><td>422</td><td>COUPON_INVALID</td><td>Unknown coupon code, at checkout or in the preview</td><td><span class="tag final">final</span></td></tr>
+<tr><td>422</td><td>IDEMPOTENCY_KEY_REUSED</td><td>The same key with a different request</td><td>Not stored</td></tr>
+<tr><td>500</td><td>INTERNAL</td><td>Anything unexpected, including a backstop constraint firing (which means a bug). Logged, with no internals leaked</td><td>Not stored in reserve. In finalize, see <a href="#idem">Idempotency</a></td></tr>
+<tr><td>503</td><td>LOCK_TIMEOUT</td><td>A lock wait exceeded <code>LOCK_TIMEOUT_MS</code> (<code>55P03</code>)</td><td>Not stored in reserve. In finalize, see <a href="#idem">Idempotency</a></td></tr>
+</table></div>
+<pre><code>const ERRORS = {
+  CART_NOT_FOUND:       { status: 404, final: true },
+  CART_PAYMENT_PENDING: { status: 409, final: false },
+  …
+} as const;
+new AppError('CART_NOT_FOUND', details?)    // status and final come from ERRORS</code></pre>
+<p class="muted"><code>onError</code> builds every response with <code>toErrorBody(err)</code>, the same builder <code>completeKeyWithError</code> uses, so a stored error and a live error can't differ.</p>
+<ul class="muted">
+  <li>A Hono <code>HTTPException</code> (for example, malformed JSON) becomes VALIDATION_ERROR.</li>
+  <li>A database error is recognised as <code>err instanceof DrizzleQueryError</code>. Its <code>err.cause</code> is then safe-parsed with <code>{ code: z.string(), constraint: z.string().optional() }</code>. <code>55P03</code> becomes 503, and anything else becomes 500.</li>
+  <li>Business conflicts never reach the mapper, because explicit checks raise them first. The constraints are backstops.</li>
+</ul>
+
+<h2 id="report">Reporting</h2>
+<p><code>GET /admin/report</code> runs in a single <code>READ ONLY</code> transaction at <code>REPEATABLE READ</code>. Every number comes from the same snapshot, so a checkout committing mid-report can't make gross revenue include an order that the order count leaves out. Only <strong>paid</strong> orders count as sales. The report never resolves pending orders.</p>
+<pre><code>{
+  "paidOrders": 12,
+  "ordersByStatus": { "paid": 12, "pending_payment": 1, "failed": 2 },
+  "quantityByProduct": [{ "productId": "p_lamp", "name": "Limited Edition Desk Lamp", "quantity": 3 }],
+  "grossRevenuePaise": 0,     // SUM(subtotal_paise) over paid orders
+  "discountsPaise": 0,        // SUM(discount_paise) over paid orders
+  "netRevenuePaise": 0,       // SUM(total_paise) over paid orders  == gross - discounts
+  "coupons": { "generated": 3, "available": 1, "reserved": 1, "redeemed": 1 },
+  "milestones": { "n": 5, "reached": 2, "rewarded": 2, "unrewarded": 0 }
+}</code></pre>
+<p class="muted">Quantities are summed from <code>order_items</code> of paid orders, grouped by <code>product_id</code>, with the name taken from the current product row. Reconciliation means four things hold:</p>
+<ul class="muted">
+  <li>summing <code>GET /admin/orders?status=paid</code> gives exactly these figures;</li>
+  <li>redeemed coupons equal paid orders that have a <code>coupon_id</code>;</li>
+  <li>reserved coupons equal pending orders that have a <code>coupon_id</code>;</li>
+  <li><code>ordersByStatus</code> matches the list.</li>
+</ul>
+<p class="muted">The two endpoints are separate requests, so they reconcile only when no writes are running between them, and the test asserts that only at quiescence.</p>
+
+<h2 id="tests">Test plan</h2>
+<h3>Infrastructure</h3>
+<ul>
+  <li><strong>Database:</strong> a separate <code>checkout_test</code> database in the same Docker container, created by an initdb script. <code>globalSetup</code> zod-parses <code>DATABASE_URL</code>, refuses to run unless the database name ends in <code>_test</code>, and runs the migrations once.</li>
+  <li><strong>Isolation:</strong> <code>fileParallelism: false</code>, because the files share one database. <code>TRUNCATE … RESTART IDENTITY CASCADE</code> plus a reseed before every test. <code>afterEach</code> releases every gate and awaits every in-flight request <em>before</em> truncating. Each pool closes in <code>afterAll</code>.</li>
+  <li><strong>The app:</strong> each file builds <code>createDb(testConfig)</code> and calls <code>createApp({ config, gateway, db })</code> through <code>app.request()</code>, with no server running. Each test gets a fresh <code>FakeGateway</code>.</li>
+  <li><strong>Test config:</strong> it must pass the boot schema: <code>LOCK_TIMEOUT_MS = 10000</code>, <code>GATEWAY_TIMEOUT_MS = 60000</code>, a TTL of 600 seconds, and <code>n = 2</code> where milestones matter. T15 and T17 alone build a second db and app with <code>LOCK_TIMEOUT_MS = 200</code>.</li>
+  <li><strong>Pool size:</strong> the test pool's <code>max</code> is at least the fan-out + 2. A gated request holds no connection, so this stays correct.</li>
+  <li><strong>Lock barrier</strong> (<code>test/helpers/barrier.ts</code>):
+    <ul>
+      <li>A dedicated connection opens a transaction and locks the target: a row with <code>FOR UPDATE</code>, or the advisory lock. The test fires N requests.</li>
+      <li>A <em>separate autocommit connection</em> polls <code>pg_stat_activity</code>, filtered on <code>datname = current_database()</code> and excluding the barrier and poller PIDs, until N backends show <code>wait_event_type = 'Lock'</code>. On timeout it throws <code>BarrierTimeout</code>.</li>
+      <li>Then the barrier commits.</li>
+      <li>Each test records which statement blocks on the barrier, both with the enforcement present and with it removed.</li>
+    </ul></li>
+  <li><strong><code>holdLock(target)</code></strong> takes the same lock but releases only when the test calls <code>release()</code>. It is used where a request must time out (T17).</li>
+  <li><strong>Gate</strong> (<code>test/helpers/gate.ts</code>): see <a href="#gateway">Fake gateway</a>. A gated test awaits <code>entered</code>, then awaits the N−1 losers (with a bound), then runs the idle-in-transaction check excluding the barrier and poller PIDs, and only then releases. It never <code>Promise.all</code>s a gated request before releasing it.</li>
+  <li><strong>Clock:</strong> every time comparison uses the database's <code>now()</code>. Tests backdate relative to the row (<code>created_at - interval '1 day'</code>) and never pass a JavaScript <code>Date</code>, since the Docker VM clock can drift.</li>
+  <li><strong>Assertions:</strong> every concurrency test asserts the <em>exact</em> status counts and <strong>zero 500s</strong>, because the database backstops would otherwise hide a missing lock. While a gate is held, no backend may be <code>idle in transaction</code>, which directly catches a charge made inside a transaction.</li>
+  <li><strong>Repeats:</strong> the concurrency file runs about 20 times once, using Vitest's <code>repeats</code> option. Check that <code>beforeEach</code> re-runs on each repeat in the installed version. Never use <code>retry</code>.</li>
+</ul>
+
+<h3>Concurrency and races</h3>
+<div class="table-wrap"><table>
+<tr><th>#</th><th>Test</th><th>Asserts</th><th>Fails if…</th></tr>
+<tr><td>T1</td><td>20 carts check out 1 lamp (stock 3) behind a barrier on the lamp row</td><td><code>{201:3, 409:17}</code>, every loser gets <code>{requested:1, available:0}</code>, stock 0, paid lamp quantity 3, zero 500s</td><td>The product lock or the stock check is removed (I1)</td></tr>
+<tr><td>T2</td><td>The same, with 2 lamps per cart</td><td><code>{201:1, 409:19}</code>, stock 1</td><td>The check is <code>stock &gt; 0</code> instead of <code>stock &gt;= qty</code></td></tr>
+<tr><td>T3</td><td>10 identical requests with one key, behind a cart barrier, gated before charging</td><td>The 9 losers wait on the uncommitted claim, then each replays <strong>202</strong> with <code>Idempotent-Replayed</code> and the same <code>orderId</code>. After release, the first request returns 201. A sequential retry replays 201 with the same body. 1 order, 1 charge, stock decremented once, no backend idle in transaction</td><td>The claim is a SELECT then INSERT (that gives 500s), the replay is removed, or the charge happens inside the transaction (I3)</td></tr>
+<tr><td>T4</td><td>One key on two carts: in sequence, and concurrently behind a barrier on the first cart. One key on the same cart with a different coupon or token. A lowercase coupon code</td><td>One 201 and 422s, with zero 500s. The lowercase code replays instead of returning 422</td><td>The key isn't claimed first, the hash is incomplete, or the code isn't normalised</td></tr>
+<tr><td>T5</td><td>5 <em>different</em> keys on one cart, behind a cart barrier, gated</td><td>4 × 409 CART_PAYMENT_PENDING. After release: one 201. One order, one decrement. One of the losing keys, retried, now gets 409 CART_CHECKED_OUT, which proves the pending 409 wasn't stored</td><td>The cart lock or the status check is removed (I2), or transient errors are stored</td></tr>
+<tr><td>T6</td><td>5 carts with no product in common race for one coupon, behind a coupon barrier, gated</td><td>4 × 409 COUPON_RESERVED, and the coupon is <code>reserved</code> while gated. After release: <code>redeemed</code>. A losing key, retried, gets COUPON_ALREADY_REDEEMED, and so does a new cart</td><td>The coupon lock or the status check is removed (I4). Disjoint products stop the product locks from hiding it</td></tr>
+<tr><td>T7</td><td>10 pairs of carts, <code>[keyboard, mouse]</code> and <code>[mouse, keyboard]</code>, inserted in opposite order, fired together</td><td>All 201, no 500s, no <code>40P01</code>. A small test with limited signal (see the mutation log)</td><td>Locks are taken per line in cart order</td></tr>
+<tr><td>T8</td><td>5 identical concurrent PUTs on a new line, behind a barrier holding <code>FOR UPDATE</code> on the cart (which also blocks the FK's <code>KEY SHARE</code>, so lockless PUTs queue too). Then the same PUT again</td><td><code>{201:1, 200:4}</code>, one row, quantity unchanged, and then 200</td><td>PUT skips the cart lock, or the upsert detection is wrong</td></tr>
+<tr><td>T9</td><td>2n paid orders, then 5 parallel coupon generations behind a barrier holding the advisory lock</td><td>Exactly 2 coupons (milestones 1 and 2) and 3 × 409</td><td>The advisory lock is removed (false 409s) or UNIQUE is removed (duplicates) (I9)</td></tr>
+<tr><td>T10</td><td>Two reconciles at once on one stale <code>tok_timeout_declined</code> order, behind a cart barrier</td><td>One transition, and <code>resolved_at</code> is set once. Stock equals the seed value exactly. The coupon is <code>available</code>. Both reconciles list the order as <code>failed</code></td><td>The <code>AND status = 'pending_payment'</code> guard is removed, so stock is restored twice (I13)</td></tr>
+<tr><td>T11</td><td>Recovery against the original phase 3: gated <em>after</em> recording an approval, backdated, then reconcile, then release</td><td>Reconcile makes the order <code>paid</code>. <code>orders.resolved_at</code>, <code>coupons.redeemed_at</code> and <code>payment_ref</code> are identical before and after the release. The original request responds 201. One charge</td><td>Finalize isn't conditional, which shows up as the timestamps being rewritten (I13)</td></tr>
+<tr><td>T12</td><td>A slow charge overtaken: gated <em>before</em> recording, backdated, then reconcile, then release</td><td>Reconcile: not found, cancelled, <code>failed</code> with reason <code>abandoned</code>, everything released. After release the fake declines (<code>cancelled</code>). The original request responds 402 with reason <strong><code>abandoned</code></strong>, which proves the response comes from the current state. Zero approved charges</td><td>Recovery releases without calling <code>cancel()</code> (I7), or the response comes from the request's own result</td></tr>
+</table></div>
+
+<h3>Payments and recovery</h3>
+<div class="table-wrap"><table>
+<tr><th>#</th><th>Test</th><th>Asserts</th><th>Fails if…</th></tr>
+<tr><td>T13</td><td>Decline (<code>pm_card_chargeDeclined</code>) with a coupon</td><td>402 PAYMENT_FAILED. The order is <code>failed</code>, stock is restored, the coupon is <code>available</code>, and the cart is <code>open</code>. The same key gets 402 again. The same key with a new token gets 422. A new key with the same coupon and <code>pm_card_visa</code> gets 201</td><td>Release misses any of stock, coupon or cart (I6)</td></tr>
+<tr><td>T14</td><td><code>tok_timeout_approved</code>, then the same key before the TTL, then reconcile before the TTL, then backdate, then reconcile again</td><td>202 with <code>Retry-After</code>, with stock and coupon held. The retry replays 202. The first reconcile leaves it alone (<code>stillPending: 1</code>). After the second: <code>paid</code>, coupon <code>redeemed</code>, cart <code>checked_out</code>. A replay returns 201</td><td>A timeout releases the reservation (I7), or reconcile ignores the TTL</td></tr>
+<tr><td>T15</td><td>Recovery triggers, as one <code>it.each</code> on the 200 ms app: checkout on the cart; checkout by another cart using the held coupon; checkout by another cart wanting the held lamps; PUT of the held lamps on another cart; PUT and DELETE on the cart. Each against a stale <code>tok_timeout_declined</code> order</td><td>The stale order is resolved to <code>failed</code> first, and then the triggering request proceeds normally. Against a <em>fresh</em> pending order: 409 CART_PAYMENT_PENDING, 409 COUPON_RESERVED, or 409 INSUFFICIENT_STOCK</td><td>A trigger is missing, or recovery runs inside the mutation's transaction (that gives a 503 within 200 ms)</td></tr>
+<tr><td>T16</td><td>Crash: run <code>reservePhase()</code>, the real phase 1 including the claim, with the same key and hash the HTTP retry will use, and never charge. Retry before the TTL. Backdate. Admin reconcile. Retry again</td><td>Before the TTL: the retry replays 202. After reconcile: <code>failed / abandoned</code>, everything released, and the retry replays 402</td><td>The key isn't bound to the order at step 8 (I14), or recovery doesn't release (I6)</td></tr>
+<tr><td>T17</td><td>503, on the 200 ms app: <code>holdLock</code> the lamp row. Fire a checkout and await its 503. Release. Retry with the same key</td><td>503 LOCK_TIMEOUT, and no key row exists. The retry gets 201</td><td>Infrastructure errors are stored on the key</td></tr>
+<tr><td>T18</td><td>PATCH stock during a reservation: gated with 1 lamp reserved, PATCH lamp stock to 10, then decline</td><td>Stock is 11</td><td>Release writes an absolute value from the snapshot taken at reserve time</td></tr>
+<tr><td>T19</td><td>Zero total (<code>x = 100</code>), plus a crashed zero-total order recovered by reconcile</td><td><code>paid</code> with <code>payment_ref</code> null, and zero gateway calls in both cases</td><td>Zero totals are charged, or recovery abandons them</td></tr>
+<tr><td>T20</td><td>The storage rule, as one <code>it.each</code> over every checkout error code, plus the decline reasons <code>insufficient_funds</code> and an unknown token</td><td><ul><li><strong>Final codes:</strong> the key row has a stored response, and the replay carries <code>Idempotent-Replayed</code>. CART_EMPTY: add an item, retry the same key, and the 422 replays.</li><li><strong>PAYMENT_FAILED:</strong> the key has an order, and replays 402 with the reason.</li><li><strong>Transient codes, 400s and 503:</strong> no key row.</li></ul></td><td>The <code>final</code> flag is wrong for any code (I14)</td></tr>
+</table></div>
+
+<h3>Business rules, views and units</h3>
+<div class="table-wrap"><table>
+<tr><th>#</th><th>Test</th><th>Asserts</th><th>Fails if…</th></tr>
+<tr><td>T21</td><td>Price edited after add, then checkout with a stale total. A coupon checkout using the preview's total</td><td>409 PRICE_CHANGED with the breakdown, the same key replays it, and there are 0 orders. A new key with the new total gets 201. The preview's <code>totalPaise</code> is accepted first time with the coupon</td><td>The price guard is removed, a write is placed before a check (I5), or the preview and checkout prices differ</td></tr>
+<tr><td>T22</td><td>A checkout with a coupon fails on stock. Restock, then retry with the same key</td><td>The coupon is <code>available</code>, stock is unchanged, the cart is <code>open</code>, and there are 0 orders. The same key replays 409. A new key gets 201</td><td>A write is placed before a check (I5), or final failures aren't stored</td></tr>
+<tr><td>T23</td><td>Product name and price edited after an order</td><td><code>GET /orders/:id</code> is unchanged</td><td>The order view reads from <code>products</code> (I11)</td></tr>
+<tr><td>T24</td><td>Cart states and views</td><td><ul><li>PUT and DELETE on a checked-out cart get 409.</li><li>A PUT on a pending cart (gated) gets 409. After a decline releases it, the PUT gets 200.</li><li>Removing the last line then checking out gets 422 CART_EMPTY.</li><li>Deleting an absent line gets 200. A PUT above stock gets 409.</li><li>The view shows odd-paise totals and <code>available:false</code> after stock is set to 0.</li><li>The preview of a reserved coupon gets 409 COUPON_RESERVED, a redeemed one gets 409 COUPON_ALREADY_REDEEMED, and an unknown code gets 422.</li></ul></td><td>The status check on mutations is removed (I12), or the preview shows a total checkout would reject</td></tr>
+<tr><td>T25</td><td>Validation and not-found, as one <code>it.each</code></td><td><ul><li>Quantity 0, −1, 1.5, "2" and 1001.</li><li>A malformed cart or product ID, and an unknown product.</li><li>Unknown carts on GET, PUT and DELETE. An unknown order on <code>GET /orders/:id</code>.</li><li>A missing key, and one over 255 characters. A missing <code>expectedTotalPaise</code>.</li><li>A non-JSON Content-Type, malformed JSON, an empty PATCH, and an unknown route (404 NOT_FOUND in the envelope).</li></ul>All give 400 or 404, nothing changes, no key is stored, and there are zero 500s</td><td>A boundary schema is loosened, or a handler is missing</td></tr>
+<tr><td>T26</td><td>Report after a mixed run (paid, failed, pending, with coupons), including a stale pending order</td><td>Equals the sums over <code>/admin/orders?status=paid</code>. Coupon counts match the orders. Two calls give the same result. After the report, a coupon preview and a <code>GET /orders/:id</code>, the row counts and statuses are unchanged, and the stale order is still pending</td><td>The report counts non-paid orders, or a GET mutates state (I15)</td></tr>
+<tr><td>T27</td><td>Unit: money</td><td>Cable 34999 with 10% off gives a discount of 3499. At 100% the total is 0. Never negative</td><td><code>Math.round</code> is used, or the clamp is wrong (I10)</td></tr>
+<tr><td>T28</td><td>Unit and integration: milestones</td><td>n−1, n and 2n paid orders. Pending and failed orders don't count. Oldest milestone first. <code>remainingEligible</code></td><td>The count includes non-paid orders</td></tr>
+<tr><td>T29</td><td>Unit: config, as one <code>it.each</code></td><td>Rejects <code>n</code> of 0 or 1.5, <code>x</code> of 0 or 101, and a TTL below 10 × the gateway timeout. Accepts <code>x = 100</code></td><td>The boot schema is loosened</td></tr>
+<tr><td>T30</td><td>Unit: fake gateway</td><td>Charging the same order twice gives the same result with one record. <code>cancel()</code> then <code>charge()</code> gives declined, <code>cancelled</code>. <code>charge()</code> then <code>cancel()</code> returns the charge. The timeout tokens record, then throw</td><td>The fake stops modelling idempotency or cancellation (I3, I7)</td></tr>
+<tr><td>T31</td><td>Recovery with stub gateways, calling <code>resolvePendingOrder</code> and reconcile directly</td><td><ul><li><code>retrieve</code> gives not found and <code>cancel</code> gives approved (the charge landed in between): the order is <code>paid</code> and the coupon <code>redeemed</code>.</li><li><code>retrieve</code> throws: the order stays pending.</li><li>Reconcile over two stale orders where one throws: the other resolves, and <code>stillPending</code> counts the failure.</li></ul></td><td>Recovery ignores a charge that landed between the two calls, releases on a gateway error, or one failure aborts reconcile (I7)</td></tr>
+</table></div>
+<p class="muted"><strong>Mutation log.</strong> For each concurrency and payment test, remove its enforcement once, watch the test fail, and record it in <code>DECISIONS.md</code> as "removed X, then test Y fails with Z", noting which statement blocked on the barrier. Two notes belong there as well:</p>
+<ul class="muted">
+  <li>Removing the savepoint alone fails no test, because every check already runs before every write. It is defence in depth.</li>
+  <li>A single <code>ANY($1) FOR UPDATE</code> without <code>ORDER BY</code> probably won't deadlock either, because both transactions scan in the same order. So T7 guards against a lock-per-line loop, and does not prove the need for <code>ORDER BY</code>.</li>
+</ul>
+<p class="muted"><strong>A race whose outcome is a set, not a single result.</strong> A key retried while the original request's finalize is running gets 202 if finalize hasn't committed yet, or the final 201 or 402 if it has. Any test that can hit this race asserts that the result is in that set.</p>
+
+<h2 id="layout">Code layout</h2>
+<pre><code>src/
+  app.ts                  createApp({ config, gateway, db }) mounts the router factories, onError, notFound
+  server.ts               builds config, db and FakeGateway, then serves
+  config.ts               env, validated with zod
+  errors.ts               ERRORS table, AppError(code, details), toErrorBody, onError, pg error mapper
+  db/
+    schema.ts             Drizzle tables, constraints, partial indexes
+    client.ts             createDb(config) -&gt; { db, pool }, with lock_timeout
+    seed.ts
+  domain/
+    money.ts              pure: lineTotal, discount, total
+    milestones.ts         pure: eligibility math
+  modules/
+    products/routes.ts    GET /products, PATCH /admin/products/:id (queries inline)
+    carts/                routes.ts, service.ts (mutations, view, coupon preview)
+    checkout/             routes.ts, service.ts (phases 0–3, reservePhase), idempotency.ts (claimKey, completeKeyWithError, replay)
+    payments/             gateway.ts, fake-gateway.ts, finalize.ts (finalizeOrder), recovery.ts (findStalePending,
+                          resolvePendingOrder), routes.ts (POST /admin/payments/reconcile)
+    orders/               routes.ts (GET /orders/:id, GET /admin/orders), view.ts (loadOrderView, toOrderView, toCheckoutResponse)
+    coupons/              routes.ts, service.ts, code.ts (couponCodeSchema, generator)
+    report/               routes.ts, service.ts
+drizzle/                  generated migrations
+test/
+  helpers/                db.ts (truncate + seed), barrier.ts (barrier, holdLock), gate.ts, app.ts
+  concurrency.test.ts  idempotency.test.ts  payments.test.ts  coupons.test.ts
+  carts.test.ts  report.test.ts  unit.test.ts
+docker-compose.yml  requests.http  README.md  DECISIONS.md</code></pre>
+<div class="table-wrap"><table>
+<tr><th>Router factory</th><th>Dependencies</th></tr>
+<tr><td><code>productsRoutes</code></td><td><code>{ db }</code></td></tr>
+<tr><td><code>cartsRoutes</code></td><td><code>{ db, gateway, config }</code>: recovery needs the gateway and the TTL</td></tr>
+<tr><td><code>checkoutRoutes</code></td><td><code>{ db, gateway, config }</code></td></tr>
+<tr><td><code>ordersRoutes</code></td><td><code>{ db }</code></td></tr>
+<tr><td><code>couponsRoutes</code></td><td><code>{ db, config }</code></td></tr>
+<tr><td><code>reportRoutes</code></td><td><code>{ db, config }</code></td></tr>
+<tr><td><code>paymentsRoutes</code></td><td><code>{ db, gateway, config }</code></td></tr>
+</table></div>
+<p class="muted">A module gets a <code>service.ts</code> only when it owns a transaction or a rule. Endpoints that are a single read keep their query in <code>routes.ts</code>. Each service calls <code>db.transaction(fn, { isolationLevel, accessMode })</code> directly. Carts and checkout both import recovery from <code>modules/payments</code>, and checkout imports <code>orders/view</code>, so the module graph has no cycles.</p>
+
+<h2 id="scale">Multiple instances and production scale</h2>
+<ul>
+  <li><strong>Correctness holds with N instances.</strong> Every invariant lives in Postgres: locks, constraints and transactions. No in-process state, mutex or cache is involved. The one exception is the <em>fake</em> gateway's in-memory store, which is per process. A real PSP is external and shared, so the exception goes away with it.</li>
+  <li><strong>A real PSP:</strong> keep the same three phases.
+    <ul>
+      <li>Stripe can cancel only a PaymentIntent that already exists. So the adapter <em>creates</em> the PaymentIntent first, with <code>orderId</code> as its idempotency key, stores its ID on the order, and only then confirms it. <code>cancel()</code> targets that stored ID, which closes the intent even if the confirm request never arrived.</li>
+      <li>Make the PSP's <strong>webhook</strong> the main way a pending order gets resolved, with <code>retrieve()</code> as the fallback.</li>
+      <li>Run reconcile on a schedule as well as lazily.</li>
+    </ul></li>
+  <li><strong>Downstream side effects</strong> (receipt emails, an <code>OrderPaid</code> event for analytics or fulfilment): this is where the <strong>transactional outbox</strong> comes in. <code>finalizeOrder</code> writes an outbox row in the same transaction that marks the order paid, and a relay delivers it at least once to idempotent consumers. Brandur's design pairs the same way, with a "transactionally staged job drain" for receipts.</li>
+  <li><strong>Hot products:</strong> per-row locks serialize the reserve phase for one SKU. Payment calls hold no locks, so this lasts only milliseconds. At flash-sale scale, move to a stock-reservation table or partitioned counters.</li>
+  <li><strong>Report:</strong> <code>SUM</code> over all orders gets slow over time. Fix it with counters updated in <code>finalizeOrder</code>, or with a read replica.</li>
+  <li><strong>Idempotency keys:</strong> scope them per client or API key once auth exists, and add a retention window.</li>
+  <li><strong>Pool sizing:</strong> lock waits hold connections, so set the pool size and <code>lock_timeout</code> together.</li>
+</ul>
+
+<h2 id="deferred">Intentionally deferred</h2>
+<div class="grid2">
+  <div class="card"><ul><li>Auth and real admin protection</li><li>A real PSP adapter and webhooks</li><li>Refunds and cancellations, which would break I13 and need per-line discount allocation</li><li>Cart expiry, and reserving stock at add time</li><li>Retention and per-client scoping of idempotency keys</li></ul></div>
+  <div class="card"><ul><li>Multi-currency, tax, and minimum charge amounts</li><li>Pagination on the admin lists</li><li>An OpenAPI spec (a <code>.http</code> file instead)</li><li>Frontend</li><li>Changing n after milestones exist</li><li>An outbox, until there are downstream side effects</li></ul></div>
+</div>
+
+<h2 id="decisions">Decision log</h2>
+<div class="table-wrap"><table>
+<tr><th>Topic</th><th>Decision</th><th>Rejected</th><th>By</th></tr>
+<tr><td>Price changes after add</td><td>Charge the current price. <code>expectedTotalPaise</code> is <strong>required</strong>, and a mismatch gets 409 PRICE_CHANGED</td><td>An optional guard. Locking the price at add time</td><td><span class="tag user">Product</span></td></tr>
+<tr><td>Seeing the discounted total</td><td><code>GET /carts/:id?couponCode=</code> preview</td><td>Attaching the coupon to the cart. Guarding the subtotal instead</td><td><span class="tag user">Product</span></td></tr>
+<tr><td>Previewing an unavailable coupon</td><td>The same 409 checkout would return</td><td>200 with the coupon's status and no discount</td><td><span class="tag user">Product</span></td></tr>
+<tr><td>A failed checkout, retried with the same key</td><td>The first business outcome is final (Stripe-style)</td><td>Re-executing failures</td><td><span class="tag user">Product</span></td></tr>
+<tr><td>Conflicts with another in-flight payment</td><td>Only cart and coupon holds are transient. Stock held by a payment still in flight is a final INSUFFICIENT_STOCK</td><td>Storing every conflict as final. A transient STOCK_RESERVED</td><td><span class="tag user">Product</span></td></tr>
+<tr><td>Stock check at add</td><td>A soft check, rejecting above current stock, with no reservation</td><td>No check</td><td><span class="tag user">Product</span></td></tr>
+<tr><td>Cart writes</td><td>PUT sets the quantity (201 or 200). DELETE of an absent line returns 200</td><td>A POST increment. A 404 on an absent line</td><td><span class="tag user">Product</span></td></tr>
+<tr><td>Quantity cap</td><td>1000 per line</td><td>100. No cap</td><td><span class="tag user">Product</span></td></tr>
+<tr><td>PATCH stock</td><td>Sets the stock available to sell. A decline adds reserved units back on top</td><td>On-hand stock, including reservations</td><td><span class="tag user">Product</span></td></tr>
+<tr><td>Milestone backlog</td><td>One coupon per call, oldest first</td><td>All at once. Latest only</td><td><span class="tag user">Product</span></td></tr>
+<tr><td>Coupon ownership</td><td>Bearer</td><td>Tied to a cart</td><td><span class="tag user">Product</span></td></tr>
+<tr><td>Which orders count</td><td>Every paid order</td><td>Full-price orders only</td><td><span class="tag user">Product</span></td></tr>
+<tr><td>Nothing eligible</td><td>409 NO_ELIGIBLE_MILESTONE</td><td>200 with <code>generated: false</code></td><td><span class="tag user">Product</span></td></tr>
+<tr><td>Payment</td><td>A fake gateway. Reserve, then charge, then finalize, in one synchronous request</td><td>No abstraction. A two-phase API</td><td><span class="tag user">Product</span></td></tr>
+<tr><td>Unknown payment outcome</td><td>Hold. Resolve after the TTL, lazily on mutating requests and through admin reconcile</td><td>Hold until the admin reconciles only</td><td><span class="tag user">Product</span></td></tr>
+<tr><td>After a decline</td><td>The cart reopens, and a new key is needed</td><td>Close the cart</td><td><span class="tag user">Product</span></td></tr>
+<tr><td>Fake gateway control</td><td>Injection in tests, plus Stripe-style test tokens in <code>paymentToken</code></td><td>Injection only</td><td><span class="tag user">Product</span></td></tr>
+<tr><td>Checkout pattern</td><td>Idempotency keys with atomic phases, a reservation and a reconciler (Stripe / Brandur)</td><td>Transactional outbox + worker. A workflow engine</td><td><span class="tag rev">Review</span></td></tr>
+<tr><td>Releasing an abandoned order</td><td><code>cancel()</code> at the gateway first, plus a hard <code>charge()</code> timeout, and a TTL of at least 10 × that timeout</td><td>Relying on the TTL alone</td><td><span class="tag rev">Review</span></td></tr>
+<tr><td>Key state</td><td>No <code>state</code> column. Replay from the order, or from the stored response</td><td>An <code>in_progress</code>/<code>completed</code> column (a false 409 for up to the TTL, and a key lock in finalize)</td><td><span class="tag rev">Review</span></td></tr>
+<tr><td>Recovery triggers</td><td>Cart, coupon <em>and</em> stock holds, on mutating requests only</td><td>Cart and coupon only (a stale stock hold caused a final INSUFFICIENT_STOCK)</td><td><span class="tag rev">Review</span></td></tr>
+<tr><td>Recording a final failure</td><td>Steps 2–8 in a savepoint. Roll back, record on the key, commit</td><td>Relying on the order of statements alone</td><td><span class="tag rev">Review</span></td></tr>
+<tr><td>Wiring</td><td><code>createDb(config)</code>, and router factories with explicit dependencies</td><td>A module-level pool singleton. Hono context variables</td><td><span class="tag rev">Review</span></td></tr>
+<tr><td>Error definitions</td><td>One <code>ERRORS</code> table holding status and final, and one <code>toErrorBody</code></td><td>Status and final passed at each throw</td><td><span class="tag rev">Review</span></td></tr>
+<tr><td>Off-the-shelf fake</td><td>Our own fake, shaped like Stripe</td><td>Stripe test mode (needs credentials). <code>stripe-mock</code> (always succeeds)</td><td><span class="tag rev">Review</span></td></tr>
+<tr><td>Idempotency storage</td><td>A key table, claimed first in reserve</td><td>A key on the order row (a cross-cart 500, and no way to store failures)</td><td><span class="tag rev">Review</span></td></tr>
+<tr><td>Row lock mode</td><td><code>FOR NO KEY UPDATE</code> for every explicit lock</td><td><code>FOR UPDATE</code> (blocks FK inserts)</td><td><span class="tag rev">Review</span></td></tr>
+<tr><td>Lock timeout</td><td>Set on the pool, configurable, as 503 LOCK_TIMEOUT</td><td><code>SET LOCAL</code> in each transaction. Unbounded waits</td><td><span class="tag rev">Review</span></td></tr>
+<tr><td>Coupon redemption record</td><td><code>orders.coupon_id</code> only</td><td>Also <code>coupons.redeemed_order_id</code> (three copies that can drift)</td><td><span class="tag rev">Review</span></td></tr>
+<tr><td>Generation race</td><td><code>UNIQUE (milestone)</code>, plus <code>pg_advisory_xact_lock</code> against false 409s</td><td>UNIQUE alone</td><td><span class="tag rev">Review</span></td></tr>
+<tr><td>Coupon codes</td><td>Uppercase Crockford base32 suffix, with one shared normalising schema</td><td>A mixed-case suffix (normalised input would never match)</td><td><span class="tag rev">Review</span></td></tr>
+<tr><td>Money types</td><td><code>bigint</code> in mode <code>number</code>, with a quantity cap</td><td>Mixed <code>integer</code> and <code>bigint</code></td><td><span class="tag rev">Review</span></td></tr>
+<tr><td>Report consistency</td><td>A read-only <code>REPEATABLE READ</code> transaction</td><td>One large SQL statement</td><td><span class="tag rev">Review</span></td></tr>
+<tr><td>Bad idempotency header</td><td>One code, IDEMPOTENCY_KEY_INVALID</td><td>Separate REQUIRED and VALIDATION_ERROR codes</td><td><span class="tag rev">Review</span></td></tr>
+<tr><td>Admin PATCH product</td><td>Kept, with a strict schema that needs at least one field</td><td>Setting prices with SQL in tests</td><td><span class="tag rev">Review</span></td></tr>
+<tr><td>Display strings, <code>tx</code> helper</td><td>Dropped</td><td>Kept</td><td><span class="tag rev">Review</span></td></tr>
+</table></div>
+
+<h2 id="decisions-md">DECISIONS.md outline</h2>
+<p>Each item the brief asks for, mapped to its source in this document. Every material decision uses the brief's Context / Options / Choice / Why / Consequences shape.</p>
+<div class="table-wrap"><table>
+<tr><th>Brief asks for</th><th>Section</th><th>Source here</th></tr>
+<tr><td>System invariants</td><td>I1–I15, with where each is enforced and the test that proves it</td><td><a href="#invariants">Invariants</a>, <a href="#tests">Tests</a></td></tr>
+<tr><td>Ambiguities and the semantics chosen</td><td>Price changes and the preview, failed retries, transient vs final conflicts, cart writes, coupon semantics, pending payments, PATCH stock</td><td><a href="#decisions">Decision log</a>, <a href="#coupons">Coupons</a></td></tr>
+<tr><td>At least 5 material decisions</td><td>1. Row locks. 2. The idempotency key table, with final and transient outcomes and no state column. 3. Reserve, charge, finalize, as atomic phases rather than an outbox. 4. Holding unknown outcomes, with cancel-before-release recovery. 5. The required price guard and the coupon preview. 6. PUT set-quantity. 7. Coupon generation and the advisory lock. 8. Money in bigint paise with floor rounding. 9. Report snapshot.</td><td>Throughout</td></tr>
+<tr><td>Transaction, concurrency and idempotency strategy</td><td>Phases, savepoint, lock order, isolation level, recovery</td><td><a href="#checkout">Checkout flow</a>, <a href="#locks">Lock order</a>, <a href="#recovery">Recovery</a>, <a href="#idem">Idempotency</a></td></tr>
+<tr><td>Payment choice, explained</td><td>The fake gateway, and why not Stripe test mode or <code>stripe-mock</code></td><td><a href="#gateway">Fake gateway</a></td></tr>
+<tr><td>Money and rounding rules</td><td>Paise, floor once, bigint</td><td><a href="#money">Money</a></td></tr>
+<tr><td>Error-model choices</td><td>The status classes, the codes, final vs transient, the mapper</td><td><a href="#errors">Error model</a></td></tr>
+<tr><td>Implemented versus deferred</td><td>The deferred list, plus anything left unfinished</td><td><a href="#deferred">Deferred</a></td></tr>
+<tr><td>Multiple instances and production scale</td><td>A real PSP (create before confirm), webhooks, the outbox for side effects, hot SKUs, the report</td><td><a href="#scale">Multi-instance</a></td></tr>
+<tr><td>How AI tools were used</td><td>Include correction examples:<ul><li>The v1 review: a cross-cart key gave a 500, and the planned tests stayed green on broken code.</li><li>The v2 review: a slow charge could be released and then succeed, and keys could stay stuck forever.</li><li>The v3 review: the key's state column was redundant and caused false 409s, and stale stock holds had no recovery trigger.</li><li>Rejecting the outbox after researching what it solves.</li></ul></td><td>Written during implementation</td></tr>
+<tr><td>Mutation log</td><td>"Removed X, then test Y fails with Z", for each concurrency and payment test, plus the savepoint and ORDER BY notes</td><td>Written during implementation</td></tr>
+<tr><td>What I'd examine with another two hours</td><td>Candidates: a real PSP adapter with webhooks, contention on hot SKUs, a scheduled reconciler</td><td>Written at the end</td></tr>
+<tr><td>Approximate time spent</td><td>Stated in the README and DECISIONS.md</td><td>Written at the end</td></tr>
+</table></div>
+
+</main>
+</div>
+</body>
+</html>

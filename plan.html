@@ -1,0 +1,499 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Implementation Plan</title>
+<style>
+:root {
+  --bg: #fbfaf8; --surface: #ffffff; --surface-2: #f3f1ed; --border: #e3dfd8;
+  --text: #1d1b18; --muted: #6b665e; --accent: #2f5d8a; --accent-soft: #e6eef6;
+  --ok: #2e7d4f; --ok-soft: #e5f3ea; --warn: #9a6a00; --warn-soft: #fbf1d9;
+  --bad: #a83a32; --bad-soft: #f8e6e4; --code-bg: #f3f1ed;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161514; --surface: #1e1d1b; --surface-2: #262522; --border: #36332f;
+    --text: #ece9e4; --muted: #a29d94; --accent: #7fb0dd; --accent-soft: #1f2e3c;
+    --ok: #6cc28f; --ok-soft: #1b2e23; --warn: #e0b453; --warn-soft: #33291a;
+    --bad: #e58a82; --bad-soft: #3a2220; --code-bg: #262522;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161514; --surface: #1e1d1b; --surface-2: #262522; --border: #36332f;
+  --text: #ece9e4; --muted: #a29d94; --accent: #7fb0dd; --accent-soft: #1f2e3c;
+  --ok: #6cc28f; --ok-soft: #1b2e23; --warn: #e0b453; --warn-soft: #33291a;
+  --bad: #e58a82; --bad-soft: #3a2220; --code-bg: #262522;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+}
+.layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); max-width: 1180px; margin: 0 auto; }
+nav {
+  position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  padding: 32px 16px 32px 24px; border-right: 1px solid var(--border); font-size: 13px;
+}
+nav .brand { font-weight: 650; margin-bottom: 4px; }
+nav .sub { color: var(--muted); margin-bottom: 20px; }
+nav a { display: block; color: var(--muted); text-decoration: none; padding: 4px 0; }
+nav a:hover { color: var(--accent); }
+main { padding: 32px 40px 96px; min-width: 0; }
+h1 { font-size: 28px; margin: 0 0 6px; letter-spacing: -0.01em; }
+h2 { font-size: 20px; margin: 56px 0 12px; padding-top: 8px; border-top: 1px solid var(--border); }
+h3 { font-size: 15px; margin: 18px 0 6px; }
+p { margin: 8px 0; }
+.lede { color: var(--muted); max-width: 72ch; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+pre { background: var(--code-bg); padding: 14px 16px; border-radius: 8px; overflow-x: auto; line-height: 1.5; border: 1px solid var(--border); }
+pre code { background: none; padding: 0; }
+.table-wrap { overflow-x: auto; margin: 12px 0; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { background: var(--surface-2); font-weight: 600; white-space: nowrap; }
+tr:last-child td { border-bottom: none; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; margin: 12px 0; }
+.issue { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px 22px; margin: 20px 0; }
+.issue h2 { margin: 0 0 4px; padding: 0; border: none; font-size: 18px; }
+.meta { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 12px; }
+.tag { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 99px; letter-spacing: 0.02em; white-space: nowrap; background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); }
+.tag.size { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+.tag.dep { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+.tag.par { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.q { border-left: 3px solid var(--warn); }
+.muted { color: var(--muted); }
+.flow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0; }
+.node { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); font-weight: 600; font-size: 13px; }
+.arrow { color: var(--muted); }
+.yes { color: var(--ok); font-weight: 700; }
+ul { padding-left: 20px; }
+li { margin: 3px 0; }
+@media (max-width: 820px) {
+  .layout { grid-template-columns: 1fr; }
+  nav { position: static; height: auto; border-right: none; border-bottom: 1px solid var(--border); padding: 20px 16px; }
+  nav .links { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+  main { padding: 24px 16px 64px; }
+  .issue { padding: 16px; }
+}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav>
+  <div class="brand">Checkout &amp; Rewards</div>
+  <div class="sub">Implementation plan, draft 1</div>
+  <div class="links">
+    <a href="#principles">Principles</a>
+    <a href="#order">Order</a>
+    <a href="#dod">Definition of done</a>
+    <a href="#i01">01 Foundation</a>
+    <a href="#i02">02 Carts</a>
+    <a href="#i03">03 Checkout</a>
+    <a href="#i04">04 Coupons</a>
+    <a href="#i05">05 Pending payments</a>
+    <a href="#i06">06 Reporting</a>
+    <a href="#i07">07 Submission</a>
+    <a href="#coverage">Coverage</a>
+    <a href="#questions">Open questions</a>
+  </div>
+</nav>
+<main>
+
+<h1>Implementation Plan</h1>
+<p class="lede">Seven GitHub issues that build the design in <code>architecture.html</code> (v4). Each issue is a vertical slice: it owns its schema migration, routes, error codes, tests and docs, and when it merges, the service works end to end for everything built so far. Test IDs (T1–T31) and invariant IDs (I1–I15) refer to <code>architecture.html</code>.</p>
+
+<h2 id="principles">Principles</h2>
+<div class="grid2">
+  <div class="card"><strong>Vertical, not layered</strong><p>No "all the schema" or "all the tests" issue. Each issue ships a behaviour a reviewer can exercise over HTTP and prove with its own tests.</p></div>
+  <div class="card"><strong>No cross-stacking</strong><p>An issue builds only on <em>merged</em> issues, and nothing is reopened later. Where a later issue extends earlier code, the extension is additive (a new branch, a new trigger) and is listed in that later issue.</p></div>
+  <div class="card"><strong>Self-contained and repeatable</strong><p>Each issue brings its own migration, seed changes, fixtures and test helpers. Migrations and seeds can be re-run safely, and every test truncates and reseeds, so tests can run in any order, any number of times.</p></div>
+  <div class="card"><strong>Docs travel with code</strong><p>Each issue updates the README endpoint table, <code>requests.http</code>, its own <code>DECISIONS.md</code> sections, and the mutation log for its tests. The last issue only finishes and verifies the docs.</p></div>
+</div>
+
+<h2 id="order">Order and dependencies</h2>
+<div class="flow">
+  <span class="node">01 Foundation</span><span class="arrow">→</span>
+  <span class="node">02 Carts</span><span class="arrow">→</span>
+  <span class="node">03 Checkout</span><span class="arrow">→</span>
+  <span class="node">04 Coupons</span><span class="arrow">→</span>
+  <span class="node">05 Pending payments</span> <span class="muted">and</span> <span class="node">06 Reporting</span><span class="arrow">→</span>
+  <span class="node">07 Submission</span>
+</div>
+<div class="table-wrap"><table>
+<tr><th>#</th><th>Issue title</th><th>Size</th><th>Needs</th><th>Branch</th></tr>
+<tr><td>01</td><td>[01] Foundation: scaffold, products, error model, test harness</td><td>M</td><td>None</td><td><code>prasad/issue-N-foundation</code></td></tr>
+<tr><td>02</td><td>[02] Carts: create, view, set and remove items</td><td>M</td><td>01</td><td><code>prasad/issue-N-carts</code></td></tr>
+<tr><td>03</td><td>[03] Checkout: reserve, charge, finalize, with idempotency keys</td><td>L</td><td>02</td><td><code>prasad/issue-N-checkout</code></td></tr>
+<tr><td>04</td><td>[04] Coupons: milestones, generation, preview and redemption</td><td>M</td><td>03</td><td><code>prasad/issue-N-coupons</code></td></tr>
+<tr><td>05</td><td>[05] Pending payments: unknown outcomes, recovery and reconcile</td><td>L</td><td>04</td><td><code>prasad/issue-N-pending-payments</code></td></tr>
+<tr><td>06</td><td>[06] Reporting: admin orders list and sales report</td><td>S</td><td>04 (not 05)</td><td><code>prasad/issue-N-reporting</code></td></tr>
+<tr><td>07</td><td>[07] Submission: DECISIONS.md, README and final verification</td><td>S</td><td>05, 06</td><td><code>prasad/issue-N-submission</code></td></tr>
+</table></div>
+<p class="muted"><code>N</code> is the GitHub issue number, assigned at creation. 05 and 06 are independent of each other, so either can go first. 04 comes before 05 so that recovery can handle coupon holds and coupon triggers completely, in one place.</p>
+
+<h2 id="dod">Definition of done (every issue)</h2>
+<ul>
+  <li>The issue's tests pass, and so does the whole suite (<code>pnpm test</code> against Docker Postgres). No test is skipped or marked <code>.todo</code>.</li>
+  <li>Any schema change is a <strong>new</strong> Drizzle migration. Its generated SQL has been read, and earlier migrations are untouched.</li>
+  <li>Every new route validates params, query, headers and body with zod, and every new error code is in the <code>ERRORS</code> table.</li>
+  <li>The README endpoint table lists each new route with its request, response, status codes and errors. <code>requests.http</code> has a runnable example for it.</li>
+  <li><code>DECISIONS.md</code> has the issue's decisions in the Context / Options / Choice / Why / Consequences shape, and the mutation log has a row for each of the issue's concurrency and payment tests: "removed X, then test Y fails with Z".</li>
+  <li>The PR title is a conventional commit, and the PR body says <code>Closes #N</code> and includes a test plan.</li>
+</ul>
+
+<!-- ============================== 01 ============================== -->
+<div class="issue" id="i01">
+<h2>[01] Foundation: scaffold, products, error model, test harness</h2>
+<div class="meta"><span class="tag size">Size M</span><span class="tag dep">Needs: none</span><span class="tag">PR: feat(api): scaffold service with products and error model</span></div>
+<p><strong>Goal:</strong> a running service that lists products and lets an admin edit one, with the error envelope, validation, config and test harness that every later issue uses.</p>
+<h3>Build</h3>
+<ul>
+  <li><strong>Tooling:</strong> Node 22, TypeScript, pnpm, Hono, Drizzle, zod and Vitest. <code>docker-compose.yml</code> runs Postgres 16, and an initdb script also creates <code>checkout_test</code>.</li>
+  <li><strong><code>config.ts</code>:</strong> the full env schema (n, x, the TTL, the gateway timeout, the lock timeout, <code>DATABASE_URL</code>, <code>PORT</code>), including the rule TTL ≥ 10 × gateway timeout. It's done now, so later issues never touch it.</li>
+  <li><strong><code>db/client.ts</code>:</strong> <code>createDb(config) → { db, pool }</code>, with <code>lock_timeout</code> set on the pool.</li>
+  <li><strong>Migration 0001:</strong> <code>products</code>. <code>seed.ts</code> loads the 5 seed products with an upsert, so it is safe to re-run.</li>
+  <li><strong><code>errors.ts</code>:</strong>
+    <ul>
+      <li>the <code>ERRORS</code> table, <code>AppError(code, details)</code> and <code>toErrorBody</code>;</li>
+      <li><code>onError</code>, including the <code>DrizzleQueryError</code> mapper (55P03 → 503);</li>
+      <li>the envelope's <code>notFound</code> handler;</li>
+      <li>a custom <code>zValidator</code> hook, and the Content-Type check.</li>
+    </ul></li>
+  <li><strong><code>app.ts</code>:</strong> <code>createApp({ config, gateway, db })</code> mounts router factories. <code>server.ts</code> boots it.</li>
+  <li><strong><code>domain/money.ts</code>:</strong> <code>lineTotal</code>, <code>discount</code> and <code>total</code>, all in integer paise.</li>
+  <li><strong>Routes:</strong> <code>GET /products</code>, and <code>PATCH /admin/products/:id</code> with a strict schema needing at least one field.</li>
+  <li><strong>Test harness:</strong>
+    <ul>
+      <li><code>globalSetup</code> refuses any database not named <code>*_test</code>, then runs the migrations;</li>
+      <li><code>fileParallelism: false</code>;</li>
+      <li><code>test/helpers/db.ts</code> (truncate + reseed) and <code>test/helpers/app.ts</code>.</li>
+    </ul></li>
+</ul>
+<h3>Errors introduced</h3>
+<p><code>VALIDATION_ERROR</code>, <code>PRODUCT_NOT_FOUND</code>, <code>NOT_FOUND</code>, <code>INTERNAL</code>, <code>LOCK_TIMEOUT</code></p>
+<h3>Tests</h3>
+<ul>
+  <li><strong>T27</strong> money unit tests: the cable at 34999 with 10% off, 100%, never negative.</li>
+  <li><strong>T29</strong> config <code>it.each</code>.</li>
+  <li><strong>T25</strong>, this issue's rows: a malformed product ID, an unknown product on PATCH, an empty PATCH, a non-JSON Content-Type, malformed JSON, and an unknown route returning 404 inside the envelope.</li>
+  <li>PATCH changes the price, name and stock, and <code>GET /products</code> reflects it.</li>
+</ul>
+<h3>Docs</h3>
+<p>README: setup (<code>docker compose up</code>, migrate, seed, run, test) and the two endpoints. <code>DECISIONS.md</code>: the skeleton with every heading the brief asks for, plus the money and rounding section and the stack choice.</p>
+<h3>Not in this issue</h3>
+<p>Carts, orders, coupons, payments, and the barrier and gate test helpers. Each helper arrives with the first issue that uses it.</p>
+</div>
+
+<!-- ============================== 02 ============================== -->
+<div class="issue" id="i02">
+<h2>[02] Carts: create, view, set and remove items</h2>
+<div class="meta"><span class="tag size">Size M</span><span class="tag dep">Needs: 01</span><span class="tag">PR: feat(carts): cart lifecycle with set-quantity semantics</span></div>
+<p><strong>Goal:</strong> a client can build and inspect a cart, and every cart mutation is safe to retry and safe under concurrency.</p>
+<h3>Build</h3>
+<ul>
+  <li><strong>Migration 0002:</strong> <code>carts</code> (with all three status values), and <code>cart_items</code> (quantity 1–1000, PK on cart and product).</li>
+  <li><strong>Routes:</strong> <code>POST /carts</code>, <code>GET /carts/:id</code>, <code>PUT /carts/:id/items/:productId</code>, <code>DELETE /carts/:id/items/:productId</code>.</li>
+  <li><strong>PUT and DELETE</strong> lock the cart <code>FOR NO KEY UPDATE</code> and require <code>status = 'open'</code>. That one guard covers both <code>checked_out</code> and <code>pending_payment</code>.</li>
+  <li><strong>PUT:</strong> a soft stock check, with 201 or 200 decided by a SELECT made under the cart lock, then an INSERT or an UPDATE.</li>
+  <li><strong>DELETE</strong> of an absent line returns 200.</li>
+  <li><strong>Cart view:</strong> live prices, <code>available</code>, <code>subtotalPaise</code>, and <code>discountPaise: 0</code> with <code>totalPaise = subtotal</code>. Those last two fields exist now so that 04 only adds a preview.</li>
+  <li><strong>Test helper:</strong> <code>test/helpers/barrier.ts</code>, with the barrier (row or advisory lock, polled from a separate autocommit connection) and <code>holdLock</code>.</li>
+</ul>
+<h3>Errors introduced</h3>
+<p><code>CART_NOT_FOUND</code>, <code>CART_CHECKED_OUT</code>, <code>CART_PAYMENT_PENDING</code>, <code>INSUFFICIENT_STOCK</code></p>
+<h3>Tests</h3>
+<ul>
+  <li><strong>T8:</strong> 5 concurrent identical PUTs behind a <code>FOR UPDATE</code> barrier on the cart give <code>{201:1, 200:4}</code>.</li>
+  <li><strong>T24</strong>, this issue's rows: delete an absent line, PUT above stock, odd-paise totals, and <code>available:false</code> after a PATCH. Both locked statuses get rejected, with each status set directly in SQL. The end-to-end versions arrive with 03.</li>
+  <li><strong>T25</strong>, this issue's rows: quantity 0, −1, 1.5, "2" and 1001; a malformed cart ID; an unknown cart on GET, PUT and DELETE; an unknown product on PUT.</li>
+</ul>
+<h3>Docs</h3>
+<p>README for the four routes, and the <code>requests.http</code> cart walkthrough. <code>DECISIONS.md</code>: PUT set-quantity with an idempotent DELETE, the soft stock check, and the 1000 quantity cap.</p>
+<h3>Not in this issue</h3>
+<p>The coupon preview (04), and recovering stale orders before a mutation (05).</p>
+</div>
+
+<!-- ============================== 03 ============================== -->
+<div class="issue" id="i03">
+<h2>[03] Checkout: reserve, charge, finalize, with idempotency keys</h2>
+<div class="meta"><span class="tag size">Size L</span><span class="tag dep">Needs: 02</span><span class="tag">PR: feat(checkout): idempotent three-phase checkout with fake gateway</span></div>
+<p><strong>Goal:</strong> a cart can be checked out exactly once. Retries, concurrent checkouts, declines and business failures all behave as the architecture specifies, and stock never oversells. This is the core of the assignment.</p>
+<h3>Build</h3>
+<ul>
+  <li><strong>Migration 0003:</strong>
+    <ul>
+      <li><code>orders</code>, without coupon columns: <code>discount_paise</code> is always 0 here, and 04 adds the coupon columns;</li>
+      <li><code>order_items</code>, and <code>idempotency_keys</code> (with no state column);</li>
+      <li>the partial unique index on the live order per cart;</li>
+      <li>all the order, line and key CHECKs.</li>
+    </ul></li>
+  <li><strong>Payments module:</strong> <code>modules/payments/gateway.ts</code> holds <code>PaymentGateway</code> with <code>charge()</code>, <code>ChargeResult</code> and <code>Resolution</code>. <code>fake-gateway.ts</code> implements <code>pm_card_visa</code>, <code>pm_card_chargeDeclined</code>, <code>pm_card_chargeDeclinedInsufficientFunds</code> and the unknown-token decline, and charges are idempotent per <code>orderId</code>.</li>
+  <li><strong><code>checkout/idempotency.ts</code>:</strong> <code>claimKey</code> (<code>ON CONFLICT DO NOTHING</code>, then a separate load), the request hash, <code>completeKeyWithError</code>, and replay from the order or from the stored response.</li>
+  <li><strong><code>checkout/service.ts</code>:</strong>
+    <ul>
+      <li><code>reservePhase</code>: steps 1–8 with the savepoint, the final and transient handling, products locked <code>ORDER BY id FOR NO KEY UPDATE</code>, and the required price guard;</li>
+      <li>phase 2, with <code>AbortSignal.timeout</code>;</li>
+      <li>phase 3: approved or declined goes to <code>finalizeOrder</code>; unknown, meaning any thrown error, returns 202 with <code>Retry-After</code>.</li>
+    </ul></li>
+  <li><strong><code>payments/finalize.ts</code>:</strong> <code>finalizeOrder</code>, with the conditional claim on the order and the product restore in ID order. It's written in full now, and recovery reuses it in 05.</li>
+  <li><strong><code>orders/view.ts</code>:</strong> <code>loadOrderView</code>, <code>toOrderView</code> and <code>toCheckoutResponse</code>. A new route, <code>GET /orders/:id</code>.</li>
+  <li><strong>Test helper:</strong> <code>test/helpers/gate.ts</code>, the <code>gated(fake, { at })</code> decorator with <code>entered</code> and <code>release()</code>.</li>
+</ul>
+<h3>Errors introduced</h3>
+<p><code>IDEMPOTENCY_KEY_INVALID</code>, <code>IDEMPOTENCY_KEY_REUSED</code>, <code>CART_EMPTY</code>, <code>PRICE_CHANGED</code>, <code>PAYMENT_FAILED</code>, <code>ORDER_NOT_FOUND</code></p>
+<h3>Tests</h3>
+<ul>
+  <li><strong>Concurrency:</strong>
+    <ul>
+      <li>T1 and T2, the lamp oversell tests;</li>
+      <li>T3, one key ×10, where the losers replay 202 while gated;</li>
+      <li>T4, one key on two carts, and the same cart with a different token;</li>
+      <li>T5, different keys on one cart;</li>
+      <li>T7, the opposite-order deadlock pairs.</li>
+    </ul></li>
+  <li><strong>Payments:</strong>
+    <ul>
+      <li>T13 without a coupon: the decline releases stock and reopens the cart, the same key replays 402, and a new key pays;</li>
+      <li>T18, PATCH stock during a reservation;</li>
+      <li>a stub gateway that throws: 202 with <code>Retry-After</code>, the order pending, and the same key replaying 202.</li>
+    </ul></li>
+  <li><strong>Storage rule:</strong> T17 (503 on the 200 ms app, no key stored, a retry gets 201), and T20 for this issue's codes.</li>
+  <li><strong>Business rules:</strong> T21 (price changed), T22 without a coupon (stock failure, 0 orders, replay), T23 (snapshot).</li>
+  <li><strong>T24</strong>, this issue's rows: PUT and DELETE on a checked-out cart and on a pending cart, end to end through checkout and the gate.</li>
+  <li><strong>T25</strong>, this issue's rows: a missing key, one over 255 characters, a missing <code>expectedTotalPaise</code>, and an unknown order.</li>
+  <li><strong>T30</strong>, this issue's rows: charge idempotency, and each token's outcome.</li>
+</ul>
+<h3>Docs</h3>
+<p>README for checkout (header, body, 201, 202, 402, every error) and <code>GET /orders/:id</code>. <code>requests.http</code> covers a paid checkout, a decline, and a replay. <code>DECISIONS.md</code>:</p>
+<ul>
+  <li>the row locks and lock order, and READ COMMITTED;</li>
+  <li>the idempotency key table, final vs transient outcomes, and no state column;</li>
+  <li>atomic phases, compared with the outbox;</li>
+  <li>the fake gateway, and why not Stripe test mode or <code>stripe-mock</code>;</li>
+  <li>the price guard;</li>
+  <li>the error model.</li>
+</ul>
+<h3>Not in this issue</h3>
+<p>Coupons (04). The timeout tokens, <code>retrieve()</code>, <code>cancel()</code>, recovery and reconcile (05). <code>finalizeOrder</code>'s conditional update is built here, but its race tests (T10, T11) need recovery, so they land in 05.</p>
+</div>
+
+<!-- ============================== 04 ============================== -->
+<div class="issue" id="i04">
+<h2>[04] Coupons: milestones, generation, preview and redemption</h2>
+<div class="meta"><span class="tag size">Size M</span><span class="tag dep">Needs: 03</span><span class="tag">PR: feat(coupons): milestone coupons with preview and single redemption</span></div>
+<p><strong>Goal:</strong> an admin can generate a coupon once a milestone is reached. A customer can preview it on their cart and redeem it exactly once. A failed checkout never consumes it.</p>
+<h3>Build</h3>
+<ul>
+  <li><strong>Migration 0004:</strong>
+    <ul>
+      <li><code>coupons</code>;</li>
+      <li>new <code>orders.coupon_id</code> and <code>orders.percent_off</code> columns;</li>
+      <li>the discount-formula CHECK and the coupon/percent pairing CHECK;</li>
+      <li>the partial unique index on the live order per coupon.</li>
+    </ul></li>
+  <li><strong><code>domain/milestones.ts</code>:</strong> the eligibility math over paid orders.</li>
+  <li><strong><code>coupons/code.ts</code>:</strong> <code>couponCodeSchema</code> (trim, uppercase), and a generator using Crockford base32.</li>
+  <li><strong>Routes:</strong>
+    <ul>
+      <li><code>POST /admin/coupons</code>: an advisory lock, then the oldest unrewarded milestone, then <code>ON CONFLICT (code)</code> retries, returning <code>remainingEligible</code>;</li>
+      <li><code>GET /admin/coupons</code>.</li>
+    </ul></li>
+  <li><strong>Additions to existing code:</strong>
+    <ul>
+      <li><strong>Cart preview:</strong> <code>?couponCode=</code> on <code>GET /carts/:id</code>. It succeeds only for an available coupon, and otherwise returns checkout's error.</li>
+      <li><strong>Reserve:</strong> step 6 locks the coupon and sets it to <code>reserved</code>. <code>couponCode</code> joins the request hash.</li>
+      <li><strong>Finalize:</strong> the coupon is redeemed on approval and made available again on a decline.</li>
+      <li><strong>Order view:</strong> includes the coupon.</li>
+    </ul></li>
+</ul>
+<h3>Errors introduced</h3>
+<p><code>COUPON_INVALID</code>, <code>COUPON_RESERVED</code> (transient), <code>COUPON_ALREADY_REDEEMED</code>, <code>NO_ELIGIBLE_MILESTONE</code></p>
+<h3>Tests</h3>
+<ul>
+  <li><strong>T6:</strong> 5 disjoint carts race for one coupon, gated, giving 4 × COUPON_RESERVED, and then the losers' retries get COUPON_ALREADY_REDEEMED.</li>
+  <li><strong>T9:</strong> 2n paid orders and 5 parallel generations behind the advisory-lock barrier give exactly 2 coupons.</li>
+  <li><strong>T28:</strong> milestone unit and integration tests.</li>
+  <li><strong>T19</strong>, the zero-total half: <code>x = 100</code> gives a paid order with no gateway call.</li>
+  <li><strong>Coupon parts of tests from 03:</strong> T4 (a lowercase code replays), T13 (a decline releases the coupon), T21 (the preview's total is accepted first time), T22 (a stock failure leaves the coupon available).</li>
+  <li><strong>T20</strong>, the coupon codes' storage rule.</li>
+  <li><strong>T24</strong>, the preview rows: reserved gets 409, redeemed gets 409, and unknown gets 422.</li>
+</ul>
+<h3>Docs</h3>
+<p>README for the coupon routes and the preview. <code>requests.http</code> covers generate, preview and redeem. <code>DECISIONS.md</code>:</p>
+<ul>
+  <li>coupon semantics: bearer codes, oldest milestone first, paid orders count, <code>percent_off</code> frozen;</li>
+  <li>the advisory lock with UNIQUE;</li>
+  <li>the preview;</li>
+  <li>the code alphabet.</li>
+</ul>
+<h3>Not in this issue</h3>
+<p>Recovering a stale order that holds a coupon (05). Coupon counts in the report (06).</p>
+</div>
+
+<!-- ============================== 05 ============================== -->
+<div class="issue" id="i05">
+<h2>[05] Pending payments: unknown outcomes, recovery and reconcile</h2>
+<div class="meta"><span class="tag size">Size L</span><span class="tag dep">Needs: 04</span><span class="tag par">Independent of 06</span><span class="tag">PR: feat(payments): recover pending payments with cancel-before-release</span></div>
+<p><strong>Goal:</strong> a payment with an unknown outcome is held, never released while its charge could still land, and resolved after the TTL. That happens lazily on mutating requests, or through the admin reconcile.</p>
+<h3>Build</h3>
+<ul>
+  <li><strong>Fake gateway:</strong> the <code>tok_timeout_approved</code> and <code>tok_timeout_declined</code> tokens, which record, then throw. <code>retrieve()</code>, and <code>cancel()</code> with a tombstone: after a cancel, any charge is declined with <code>cancelled</code>.</li>
+  <li><strong><code>payments/recovery.ts</code>:</strong>
+    <ul>
+      <li><code>findStalePending</code>, with the <code>StaleScope</code> union, the DB-clock TTL, and the cart, coupon and product clauses;</li>
+      <li><code>resolvePendingOrder</code>: zero total resolves as approved; otherwise retrieve, then cancel on not found, then <code>finalizeOrder</code>.</li>
+    </ul></li>
+  <li><strong>Phase 0 hooks</strong>, which run outside any transaction:
+    <ul>
+      <li>checkout recovers by cart, coupon and products;</li>
+      <li>PUT recovers by cart and product;</li>
+      <li>DELETE recovers by cart.</li>
+    </ul>
+    A failure recovering one order is logged and the request carries on.</li>
+  <li><strong>Route:</strong> <code>POST /admin/payments/reconcile</code>, which catches failures per order and returns <code>{ resolved, stillPending }</code>.</li>
+</ul>
+<h3>Errors introduced</h3>
+<p>None.</p>
+<h3>Tests</h3>
+<ul>
+  <li><strong>T10:</strong> two reconciles at once. Stock is restored exactly once.</li>
+  <li><strong>T11:</strong> recovery against the original finalize. The timestamps don't change.</li>
+  <li><strong>T12:</strong> a slow charge overtaken by recovery. The response is 402 with <code>abandoned</code>, and nothing is charged.</li>
+  <li><strong>T14:</strong> a timeout, then a retry that gets 202, then a reconcile before the TTL that leaves it alone, then a reconcile after the TTL that makes it paid.</li>
+  <li><strong>T15:</strong> every recovery trigger, on the 200 ms app.</li>
+  <li><strong>T16:</strong> a crash after <code>reservePhase</code>. A retry gets 202, then reconcile runs, then a retry replays 402.</li>
+  <li><strong>T19:</strong> the crashed zero-total half.</li>
+  <li><strong>T30:</strong> the cancel and retrieve rows.</li>
+  <li><strong>T31:</strong> stub gateways. A charge that lands between retrieve and cancel ends up paid. A <code>retrieve()</code> that throws leaves the order pending. One failure doesn't abort reconcile.</li>
+</ul>
+<h3>Docs</h3>
+<p>README for reconcile, and the 202 polling contract. <code>requests.http</code> covers a timeout followed by a reconcile. <code>DECISIONS.md</code>:</p>
+<ul>
+  <li>holding unknown outcomes;</li>
+  <li>cancel-before-release, and the timeout and TTL rule;</li>
+  <li>the recovery triggers, and why GET requests never trigger recovery;</li>
+  <li>the reconciler compared with Brandur's completer.</li>
+</ul>
+<h3>Not in this issue</h3>
+<p>A scheduled reconciler, and a real PSP adapter. Both are deferred and documented in 07.</p>
+</div>
+
+<!-- ============================== 06 ============================== -->
+<div class="issue" id="i06">
+<h2>[06] Reporting: admin orders list and sales report</h2>
+<div class="meta"><span class="tag size">Size S</span><span class="tag dep">Needs: 04</span><span class="tag par">Independent of 05</span><span class="tag">PR: feat(admin): sales report and reconcilable orders list</span></div>
+<p><strong>Goal:</strong> an admin can see sales and coupon figures that reconcile exactly with the orders and coupons the API returns, and reading them never changes anything.</p>
+<h3>Build</h3>
+<ul>
+  <li><strong><code>GET /admin/orders?status=</code>:</strong> order views, with a zod enum filter.</li>
+  <li><strong><code>GET /admin/report</code>:</strong> one <code>READ ONLY REPEATABLE READ</code> transaction. It reports:
+    <ul>
+      <li>paid orders, and orders by status;</li>
+      <li>quantity by product, grouped by <code>product_id</code>;</li>
+      <li>gross revenue, discounts and net revenue, all over paid orders;</li>
+      <li>coupons by status;</li>
+      <li>milestones.</li>
+    </ul>
+    Aggregates use <code>::bigint</code> and <code>mapWith(Number)</code>.</li>
+</ul>
+<h3>Errors introduced</h3>
+<p>None.</p>
+<h3>Tests</h3>
+<p><strong>T26</strong>, after a mixed run of paid, failed and pending orders with coupons:</p>
+<ul>
+  <li>the report equals the sums over <code>/admin/orders?status=paid</code>;</li>
+  <li>the coupon counts match the orders;</li>
+  <li>two calls return the same result;</li>
+  <li>the row counts and statuses are unchanged afterwards.</li>
+</ul>
+<p>Pending orders are created with a throwing stub gateway, so this issue doesn't need 05.</p>
+<h3>Docs</h3>
+<p>README for both routes. <code>requests.http</code> has a report call. <code>DECISIONS.md</code>: the report snapshot, what counts as sold, and how reconciliation is checked.</p>
+<h3>Not in this issue</h3>
+<p>Pagination and materialized counters (deferred).</p>
+</div>
+
+<!-- ============================== 07 ============================== -->
+<div class="issue" id="i07">
+<h2>[07] Submission: DECISIONS.md, README and final verification</h2>
+<div class="meta"><span class="tag size">Size S</span><span class="tag dep">Needs: 05, 06</span><span class="tag">PR: docs: complete DECISIONS.md and submission notes</span></div>
+<p><strong>Goal:</strong> the repository is ready to hand in. Every deliverable in the brief is present, and the docs agree with the code.</p>
+<h3>Build</h3>
+<ul>
+  <li><strong><code>DECISIONS.md</code></strong> gets its remaining sections:
+    <ul>
+      <li>the consolidated invariants table (I1–I15, where each is enforced, and its test);</li>
+      <li>implemented vs deferred;</li>
+      <li>multiple instances and production scale, including the real-PSP mapping and the outbox for side effects;</li>
+      <li>how AI tools were used, with the correction examples;</li>
+      <li>what to examine with another two hours;</li>
+      <li>the time spent.</li>
+    </ul></li>
+  <li><strong>README:</strong> the final pass covers setup from a clean clone, the admin routes marked as such, the time spent, and anything incomplete, stated directly.</li>
+  <li><strong><code>requests.http</code>:</strong> one end-to-end walkthrough of every endpoint and every test token.</li>
+  <li><strong>Verification:</strong>
+    <ul>
+      <li>run the concurrency file with about 20 repeats;</li>
+      <li>check that the mutation log has a row for every concurrency and payment test, including the savepoint and <code>ORDER BY</code> notes;</li>
+      <li>check that the README endpoint table matches the routes in code.</li>
+    </ul></li>
+</ul>
+<h3>Tests</h3>
+<p>No new tests. The whole suite passes from a clean clone, run with repeats.</p>
+<h3>Not in this issue</h3>
+<p>Any behaviour change. If verification finds a bug, it is fixed in the issue that owns that behaviour, or filed as a new issue.</p>
+</div>
+
+<h2 id="coverage">Coverage</h2>
+<h3>Every test has an owner</h3>
+<div class="table-wrap"><table>
+<tr><th>Issue</th><th>Owns</th><th>Extends</th></tr>
+<tr><td>01</td><td>T27, T29</td><td>T25 (products, routing)</td></tr>
+<tr><td>02</td><td>T8</td><td>T24 (cart rows), T25 (cart rows)</td></tr>
+<tr><td>03</td><td>T1, T2, T3, T5, T7, T17, T18, T23</td><td>T4, T13, T20, T21, T22, T24, T25, T30</td></tr>
+<tr><td>04</td><td>T6, T9, T28</td><td>T4, T13, T19, T20, T21, T22, T24</td></tr>
+<tr><td>05</td><td>T10, T11, T12, T14, T15, T16, T31</td><td>T19, T30</td></tr>
+<tr><td>06</td><td>T26</td><td>None</td></tr>
+</table></div>
+<p class="muted">"Extends" means the test file already exists, and the issue adds the rows or assertions for the behaviour it introduces. No issue edits another issue's assertions.</p>
+
+<h3>Every invariant lands somewhere</h3>
+<div class="table-wrap"><table>
+<tr><th>Invariant</th><th>Built in</th><th>Proved in</th></tr>
+<tr><td>I1 no oversell, I2 one live order per cart, I3 retry safety, I5 failures consume nothing, I11 snapshots, I14 key replay source</td><td>03</td><td>03</td></tr>
+<tr><td>I4 one live order per coupon, I8 coupon/order agreement, I9 one coupon per milestone</td><td>04</td><td>04</td></tr>
+<tr><td>I6 release on decline</td><td>03 (stock, cart), 04 (coupon)</td><td>03, 04</td></tr>
+<tr><td>I7 never release a charge that could land</td><td>05</td><td>05</td></tr>
+<tr><td>I10 money</td><td>01 (functions), 03 and 04 (CHECKs)</td><td>01</td></tr>
+<tr><td>I12 cart mutable only while open</td><td>02</td><td>02, then 03 end to end</td></tr>
+<tr><td>I13 an order is resolved exactly once</td><td>03</td><td>05 (the race needs recovery)</td></tr>
+<tr><td>I15 report is read-only and reconciles</td><td>06</td><td>06</td></tr>
+</table></div>
+
+<h3>Every endpoint lands somewhere</h3>
+<div class="table-wrap"><table>
+<tr><th>Issue</th><th>Endpoints</th></tr>
+<tr><td>01</td><td><code>GET /products</code>, <code>PATCH /admin/products/:id</code></td></tr>
+<tr><td>02</td><td><code>POST /carts</code>, <code>GET /carts/:id</code>, <code>PUT</code> and <code>DELETE /carts/:id/items/:productId</code></td></tr>
+<tr><td>03</td><td><code>POST /carts/:id/checkout</code>, <code>GET /orders/:id</code></td></tr>
+<tr><td>04</td><td><code>POST /admin/coupons</code>, <code>GET /admin/coupons</code>, and the <code>?couponCode=</code> preview on <code>GET /carts/:id</code></td></tr>
+<tr><td>05</td><td><code>POST /admin/payments/reconcile</code></td></tr>
+<tr><td>06</td><td><code>GET /admin/orders</code>, <code>GET /admin/report</code></td></tr>
+</table></div>
+
+<h2 id="questions">Open questions</h2>
+<div class="card q"><strong>1. Is 03 too big?</strong>
+<p>03 holds reserve, idempotency, the gateway, finalize and the order view. It's the largest issue, but splitting it means building checkout and then rewriting it. For example, checkout without keys first means the claim (reserve's first statement) and the savepoint get retrofitted later. My proposal is to keep it as one issue.</p></div>
+<div class="card q"><strong>2. Title format</strong>
+<p>Proposed: <code>[01] Foundation: …</code>. Alternatives are <code>01 · Foundation: …</code> or a conventional-commit style title such as <code>01 feat(api): …</code>.</p></div>
+<div class="card q"><strong>3. "Idempotent in each way"</strong>
+<p>I read this as meaning each issue is self-contained: it can be implemented and reviewed on its own, its migration and seed are safe to re-run, and its tests pass in any order and any number of times. If you meant something else, for example that each issue's own scripts should be re-runnable, tell me and I'll adjust.</p></div>
+
+</main>
+</div>
+</body>
+</html>
