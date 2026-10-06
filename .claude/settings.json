@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(npm test:*)",
+      "Bash(npm run:*)",
+      "Bash(npx vitest:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx drizzle-kit:*)",
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git branch:*)",
+      "Bash(git show:*)",
+      "Bash(git checkout:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(gh:*)",
+      "Bash(ls:*)",
+      "Bash(tree:*)",
+      "Bash(pwd)",
+      "Bash(which:*)",
+      "Bash(mkdir:*)"
+    ],
+    "deny": ["Bash(git push --force:*)"]
+  },
+  "hooks": {
+    "PermissionRequest": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'if [[ \"$CLAUDE_TOOL_INPUT\" =~ (credentials|secret|password|api_key|apikey|token) ]]; then echo \"Blocked: command contains sensitive keyword\" >&2; exit 1; fi'"
+          }
+        ]
+      }
+    ]
+  }
+}
