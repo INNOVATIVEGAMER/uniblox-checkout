@@ -14,17 +14,18 @@ _Consolidated table (I1–I15, where each is enforced, and the test that proves 
 - **I4 (a coupon is held by at most one live order, and redeemed at most once):** reserve locks the coupon `FOR NO KEY UPDATE` and requires `status = 'available'`. The partial unique index `orders_live_coupon_uq` (`coupon_id WHERE status <> 'failed'`) is the backstop. T6.
 - **I5 (a checkout that fails before payment consumes nothing):** every check in reserve runs before its first write. The savepoint is defence in depth: removing it alone fails no test (see the mutation log). T21, T22.
 - **I6 (a decline releases what it held):** `finalizeOrder` adds the reserved units back on top of the current stock, reopens the cart and makes the coupon `available` again, in the transaction that marks the order failed. T13, T18.
+- **I7 (a reservation is never released while its charge could still land):** a thrown charge holds the order. Recovery releases only after the gateway reports a decline, or after `cancel()` confirms that nothing was charged and nothing can be from then on. T12, T14, T31.
 - **I8 (a coupon's status agrees with its live order):** `reserved` while the order is pending, `redeemed` once it is paid, `available` after a decline. Reserve and `finalizeOrder` change the coupon in the same transaction as the order. A CHECK can't span two rows, so the only backstop is `CHECK ((status = 'redeemed') = (redeemed_at IS NOT NULL))` on the coupon itself. T6, T13.
 - **I9 (at most one coupon per milestone):** `UNIQUE (coupons.milestone)` is the guarantee. Generation takes `pg_advisory_xact_lock` first, so concurrent calls queue instead of colliding on the constraint. T9.
 - **I10 (money):** totals never go negative, `total = subtotal − discount`, and `discount = floor(subtotal × percent / 100)`. The pure functions are in `src/domain/money.ts`, and T27 proves them. Migration 0003 adds `total >= 0`, `total = subtotal − discount` and `line_total = unit_price × quantity` as CHECKs. Migration 0004 adds `discount = COALESCE(subtotal × percent_off / 100, 0)` and the pairing `(coupon_id IS NULL) = (percent_off IS NULL)`. Postgres integer division truncates, which equals floor for non-negative values, so the CHECK matches `discount()` exactly.
 - **I11 (an order still explains itself after products change):** order lines snapshot the name, unit price, quantity and line total, and the order stores the coupon's `percent_off`. T23.
 - **I12 (a cart changes only while it is open):** PUT and DELETE lock the cart row `FOR NO KEY UPDATE` and require `status = 'open'`, in the same transaction as the write. That one guard covers `pending_payment` and `checked_out`. The T24 locked-status rows drive both states through a real checkout, and a decline reopens the cart for writes.
-- **I13 (an order leaves `pending_payment` exactly once):** `finalizeOrder` claims the order with `UPDATE … WHERE status = 'pending_payment'`, and does nothing else when no row changed. Its race tests (T10, T11) need recovery, so they arrive with #5.
+- **I13 (an order leaves `pending_payment` exactly once):** `finalizeOrder` claims the order with `UPDATE … WHERE status = 'pending_payment'`, and does nothing else when no row changed. Two reconciles on one order change it once (T10), and so do recovery and the original request's own finalize (T11).
 - **I14 (a committed key has exactly one replay source):** the claim and its outcome (the order ID set in reserve, or the stored error) commit in the same transaction. `CHECK (order_id IS NULL OR response_status IS NULL)` rules out both at once. T20.
 
 ## Ambiguities and chosen semantics
 
-_Filled in by each issue as it resolves them: checkout (#3), coupons (#4), pending payments (#5)._
+_Filled in by each issue as it resolves them._
 
 ### Carts
 
@@ -42,7 +43,7 @@ _Filled in by each issue as it resolves them: checkout (#3), coupons (#4), pendi
 - **The first business outcome of a key is final (the Stripe rule).** Once reserve has started, a final error (`CART_NOT_FOUND`, `CART_CHECKED_OUT`, `INSUFFICIENT_STOCK`, `PRICE_CHANGED`, `CART_EMPTY`, `COUPON_INVALID`, `COUPON_ALREADY_REDEEMED`) is stored on the key, and the same key replays it even after the cause is fixed. A new attempt needs a new key.
 - **Only a hold on the cart or the coupon is transient.** `CART_PAYMENT_PENDING` and `COUPON_RESERVED` are stored nowhere, so the same key can succeed once the other payment resolves. Stock held by a payment that is still in flight is a final `INSUFFICIENT_STOCK`: the client can't know whether that payment will release it.
 - **A decline reopens the cart.** The order is `failed`, its stock is released, and the cart is `open` with its lines intact. The same key replays the 402, and a new key can pay.
-- **An unknown payment outcome holds the reservation.** When the gateway throws or times out, the order stays `pending_payment` and the response is 202 with `Retry-After: 5`. Retrying the same key replays the current state. Resolving these orders is #5.
+- **An unknown payment outcome holds the reservation.** When the gateway throws or times out, the order stays `pending_payment` and the response is 202 with `Retry-After: 5`. Retrying the same key replays the current state. See Pending payments below.
 - **A zero total is never charged.** A cart can total 0 through a product priced at 0, or with a 100% coupon (T19). It is paid with `payment_ref` null and no gateway call.
 - **The cart ID is lowercased before hashing.** Postgres compares UUIDs case-insensitively, so without this the same cart sent in upper case would be a different request and get 422. The coupon code is normalised by `couponCodeSchema` for the same reason.
 
@@ -55,6 +56,13 @@ _Filled in by each issue as it resolves them: checkout (#3), coupons (#4), pendi
 - **At most one coupon per order, and no expiry.**
 - **A coupon held by a pending payment is `409 COUPON_RESERVED`, transient.** It may become available again if that payment is declined.
 - **The preview checks the coupon whatever the cart's status.** It is a view, not a checkout: on the cart whose own pending order holds the coupon, it returns `COUPON_RESERVED`.
+
+### Pending payments
+
+- **Polling a 202 means re-POSTing the checkout with the same key.** It replays the order's current state, and once the order is older than `PAYMENT_PENDING_TTL_SECONDS` it resolves the order first. `GET /orders/:id` shows the order and never resolves it.
+- **The TTL is measured on the database clock:** `created_at < now() - make_interval(secs => ttl)`. Clock skew between app instances can't make an order stale early.
+- **An abandoned order fails with reason `abandoned`.** That is the reason recovery gives when it cancels a charge the gateway never recorded. If the original request's late charge is finalized first, or a second recovery sees the cancel's tombstone, the stored reason is `cancelled` instead. Both mean that nothing was charged.
+- **`stillPending` counts every order still pending after a reconcile.** That includes orders younger than the TTL, which reconcile leaves alone, and stale orders whose recovery failed.
 
 ## Material decisions
 
@@ -236,7 +244,7 @@ For HTTP, Express and Fastify were the alternatives to Hono. For validation, the
 
 **Why:**
 
-- It covers every failure the brief names with no worker and no broker. The pending order row is the durable record of the intent to charge, so a crash at any point leaves something that recovery (#5) can resolve.
+- It covers every failure the brief names with no worker and no broker. The pending order row is the durable record of the intent to charge, so a crash at any point leaves something that recovery can resolve.
 - **The outbox** solves a different problem: writing to the database and publishing to a broker atomically. We have no broker and no consumers. It needs an always-on relay, makes every checkout asynchronous (always 202, then poll), and its relay can publish twice. It becomes the right tool once there are downstream side effects, such as a receipt email.
 - **A workflow engine** is a correct pattern for a much bigger problem than ours.
 - **No payment step** can't show a reservation surviving a failed payment.
@@ -244,12 +252,12 @@ For HTTP, Express and Fastify were the alternatives to Hono. For validation, the
 
 **Consequences:**
 
-- If finalize fails with a 500 or 503 after the charge, that request gets the error. The order stays pending and the key already points to it, so a retry replays 202 until #5's recovery resolves it.
+- If finalize fails with a 500 or 503 after the charge, that request gets the error. The order stays pending and the key already points to it, so a retry replays 202 until recovery resolves it after the TTL.
 - The decline restores stock as `stock + quantity`, never an absolute value read at reserve time, so an admin PATCH during the payment is kept (T18).
 
 ### Decision: A fake gateway shaped like Stripe
 
-**Context:** The brief forbids depending on private services or credentials, and the tests need declines (and, in #5, timeouts) on demand.
+**Context:** The brief forbids depending on private services or credentials, and the tests need declines and timeouts on demand.
 
 **Options considered:**
 
@@ -257,14 +265,100 @@ For HTTP, Express and Fastify were the alternatives to Hono. For validation, the
 - `stripe-mock`.
 - Our own in-process fake behind a `PaymentGateway` interface.
 
-**Choice:** `PaymentGateway.charge(input, signal)` returns `approved` with a `paymentRef`, or `declined` with a reason. A throw means the outcome is unknown. `FakeGateway` maps Stripe's own test tokens (`pm_card_visa`, `pm_card_chargeDeclined`, `pm_card_chargeDeclinedInsufficientFunds`). Any other token is declined with `invalid_payment_method`. Charges are recorded in a `Map` keyed by order ID, so a repeated charge returns the recorded result and nothing is charged twice. Test-only control lives in `test/helpers/gate.ts`: `gated(gateway, { at: 'before' | 'after' })` holds `charge()` until `release()`, and honours the abort signal.
+**Choice:** `PaymentGateway.charge(input, signal)` returns `approved` with a `paymentRef`, or `declined` with a reason. A throw means the outcome is unknown. `retrieve(orderId)` returns the recorded charge or `not_found`. `cancel(orderId)` returns the recorded charge if there is one; otherwise it records a tombstone and returns `cancelled`, and any later `charge()` for that order is declined with `cancelled`. `tok_timeout_approved` and `tok_timeout_declined` record their outcome, then throw. `FakeGateway` maps Stripe's own test tokens (`pm_card_visa`, `pm_card_chargeDeclined`, `pm_card_chargeDeclinedInsufficientFunds`). Any other token is declined with `invalid_payment_method`. Charges are recorded in a `Map` keyed by order ID, so a repeated charge returns the recorded result and nothing is charged twice. Test-only control lives in `test/helpers/gate.ts`: `gated(gateway, { at: 'before' | 'after' })` holds `charge()` until `release()`, and honours the abort signal.
 
 **Why:**
 
 - Stripe's test mode needs a secret key, network access and an account, is rate limited, and can't produce a timeout on demand. `stripe-mock` is stateless, and its README says it returns success rather than errors. Stripe's own guidance for automated tests is to mock the gateway.
 - The interface is in-process and typed, so its results are not zod-parsed. A real HTTP adapter would parse them at its own boundary.
 
-**Consequences:** the fake's records are per process and lost on restart. A real PSP is shared, so with one the limit goes away. The timeout tokens, `retrieve()` and `cancel()` arrive with #5.
+**Consequences:** the fake's records are per process and lost on restart. After a restart, `retrieve()` says `not_found`, so recovery cancels and releases, which is right because the lost process can't charge anything either. A real PSP is shared, so with one the limit goes away.
+
+### Decision: Hold unknown outcomes, and cancel before release
+
+**Context:** A charge that throws or times out may have landed. Releasing its stock and coupon then could sell them twice and charge a customer for a failed order. Holding them forever blocks the cart and the stock.
+
+**Options considered:**
+
+- Release as soon as the charge call fails.
+- Hold, and release once the TTL passes.
+- Hold, and after the TTL ask the gateway what happened, cancelling at the gateway before any release.
+
+**Choice:** hold. Once the order is older than `PAYMENT_PENDING_TTL_SECONDS`, `resolvePendingOrder` resolves it:
+
+1. A zero total is paid, without calling the gateway.
+2. Otherwise it calls `retrieve()`. An approved or declined record decides the order.
+3. On `not_found`, it calls `cancel()`. `cancelled` fails the order with reason `abandoned`. If a charge landed between the two calls, `cancel()` returns it, and that charge decides the order.
+4. Then `finalizeOrder`. If the gateway throws at any step, nothing is written and the order stays pending.
+
+Config validation refuses to start unless `PAYMENT_PENDING_TTL_SECONDS` is at least 10 × `GATEWAY_TIMEOUT_MS`.
+
+**Why:**
+
+- **Releasing on failure** breaks I7 directly: an approved charge that only lost its response would leave a paid customer with a failed order.
+- **The TTL alone** makes I7 depend on timing. A charge slower than the TTL lands on stock that was already released. T12 shows it: with the cancel removed, the held charge is approved after reconcile released everything.
+- **Cancelling first** makes I7 hold whatever the timing. Once the cancel's tombstone is recorded, a late charge is declined.
+- **The 10 × rule** keeps the cancel rare. By the time recovery runs, the original call has long been aborted by its own timeout, so a cancel only races charges that hung far past their deadline.
+
+**Consequences:**
+
+- `retrieve()` and `cancel()` take no abort signal, because the fake answers synchronously. A real adapter would bound both with `GATEWAY_TIMEOUT_MS`, so that a hung PSP can't stall a PUT's phase 0.
+- With a real PSP, `cancel()` needs the PaymentIntent to exist, so the adapter would create it before confirming it.
+- `finalizeOrder`'s conditional claim makes every race safe: two recoveries at once, or a recovery and the original request's late finalize, change the order exactly once (T10, T11).
+
+### Decision: Recovery runs on the requests a stale hold would block, and on an admin reconcile
+
+**Context:** A held order is resolved only if something runs recovery. There is no worker process, and the brief allows no external services.
+
+**Options considered:**
+
+- A scheduled reconciler.
+- An admin reconcile only.
+- Lazily, before the mutating requests that a stale hold would block, plus an admin reconcile.
+- The same, but on GET requests too.
+
+**Choice:** the lazy triggers plus the admin reconcile. Each trigger runs before its request opens a transaction:
+
+| Request | Stale orders it resolves |
+| --- | --- |
+| Checkout | The cart's own order, the order holding the coupon, and orders holding any product in the cart |
+| PUT | The cart's own order, and orders holding the product |
+| DELETE | The cart's own order |
+| `POST /admin/payments/reconcile` | Every stale order |
+
+`findStalePending` takes a `StaleScope` union, so a trigger that forgets its filters fails to compile instead of recovering everything. Orders are resolved one at a time. A failure on one is logged, the order stays pending, and the request carries on, so its own checks decide the response.
+
+**Why:**
+
+- **Every block is covered.** A request that a stale hold would block resolves the hold first, so a stuck payment never produces a 409 `CART_PAYMENT_PENDING`, `COUPON_RESERVED` or `INSUFFICIENT_STOCK`. The stock trigger matters most, because checkout stores `INSUFFICIENT_STOCK` as the key's final answer.
+- **Outside any transaction.** Run inside a PUT's transaction, recovery's finalize waits on the cart lock that the PUT already holds. T15 shows it with that mutation: the lock wait times out, and the PUT gets 409 instead of 200.
+- **Never on GET.** Reads must not change state (I15), and repeated report requests must agree.
+- **An admin reconcile alone** leaves carts stuck until an operator acts. **A scheduler** needs an always-on process. It is deferred (#7).
+
+**Consequences:**
+
+- A request that meets a stale order waits on the gateway for it.
+- Every checkout, PUT and DELETE runs `findStalePending`, which scans `orders` because there is no index for it. That is fine at this scale. A partial index `ON orders (created_at) WHERE status = 'pending_payment'` would keep the cost proportional to pending orders.
+- Reconcile has no error response. A gateway error or lock timeout on one order leaves that order counted in `stillPending`.
+- Checkout reads the cart's product IDs before reserve, under no lock. A line added in between misses product recovery, but the PUT that added it ran its own.
+
+### Decision: A reconciler, not Brandur's completer
+
+**Context:** Brandur Leach's write-up of Stripe-style idempotency keys recovers interrupted requests with a completer, which re-drives each request from its last recovery point.
+
+**Options considered:**
+
+- A completer that re-sends the charge.
+- A reconciler that asks the gateway what happened.
+
+**Choice:** the reconciler. If the gateway approved the charge, it rolls forward. Otherwise it cancels at the gateway and rolls back.
+
+**Why:**
+
+- **Re-driving needs the payment token.** The token is never stored, which keeps card data out of the database.
+- The `pending_payment` order is already the durable record of the intent to charge, and the gateway's record is the truth about the charge.
+
+**Consequences:** an abandoned order is never retried. The customer's cart reopens, and they pay again with a new key.
 
 ### Decision: A required price guard
 
@@ -342,7 +436,6 @@ For HTTP, Express and Fastify were the alternatives to Hono. For validation, the
 
 _Further decisions arrive with the issues that make them:_
 
-- Holding unknown payment outcomes: #5.
 - The report snapshot: #6.
 
 ## Transaction, concurrency and idempotency strategy
@@ -361,7 +454,9 @@ Checkout is one request in three phases (see "Atomic phases, not an outbox"):
 2. **Charge:** no transaction and no connection are held. A zero total is approved without a call.
 3. **Finalize** (`finalizeOrder`): approved or declined, using the conditional update on the order. Approved redeems the coupon; declined makes it available again. An unknown outcome writes nothing.
 
-The lock order, isolation level and key storage rule are in the decisions above. Pending recovery: #5.
+The lock order, isolation level and key storage rule are in the decisions above.
+
+**Pending recovery** runs before any transaction opens, on the checkout, PUT and DELETE that a stale hold would block, and on `POST /admin/payments/reconcile`. It reads the stale orders, asks the gateway with no connection held, then calls the same `finalizeOrder` as phase 3. Its decline path locks the cart, then the products by ID, then the coupon, the same order as reserve. See "Hold unknown outcomes, and cancel before release".
 
 Every lock wait is bounded: the pool sets `lock_timeout` from `LOCK_TIMEOUT_MS` on every connection. A wait past that limit fails with Postgres error `55P03`, which the error handler maps to `503 LOCK_TIMEOUT`.
 
@@ -507,13 +602,29 @@ Each test that guards an enforcement was run once with that enforcement removed,
 | `.toUpperCase()` in `couponCodeSchema`                           | T4 lowercase coupon code, T21 and T24 previews, and the unit test |
 | The Crockford alias `.overwrite` in `couponCodeSchema`           | The unit test "reads a typed I or L as 1 and O as 0"         |
 | `pg_advisory_xact_lock` in generation                            | T9 fails with "1 request(s) finished without blocking on the barrier". Without a barrier, 5 parallel calls over 4 paid orders gave `[201, 500, 500, 500, 500]` 9 runs out of 10 (23505 on `coupons_milestone_unique`) |
+| `AND status = 'pending_payment'` in `finalizeOrder`'s claim      | T10: stock 4 instead of 3, because both reconciles restore it. T11: `resolved_at` and `redeemed_at` are rewritten when the original request finalizes, here 4 ms later |
+| The `cancel()` call in recovery (release on `not_found`)         | T12: the held charge is approved after release, instead of the `cancelled` tombstone. T31 "between retrieve and cancel" rows and "cancel() throws" |
+| A `cancel()` error treated as `cancelled`                        | T31 "cancel() throws after not found": the order is released while a charge could still land |
+| A charge returned by `cancel()` ignored (always `abandoned`)      | T31 "a charge that lands between retrieve and cancel" and "a decline that lands …" |
+| A `retrieve()` or `cancel()` error treated as not found / cancelled | T31 both "throws" rows, the reconcile row, and T15's gateway-failure row |
+| The per-order `try/catch`, moved around the whole loop           | T31 "one failing order does not abort reconcile": the second order stays pending |
+| The TTL clause in `findStalePending`                             | T14: the early reconcile resolves the order. T16 and all six T15 "blocked by a fresh pending order" rows |
+| The cart clause in `findStalePending`                            | T15 "a PUT of another product on the cart" and "a DELETE on the cart" |
+| The coupon clause in `findStalePending`                          | T15 "checkout by another cart using the held coupon" |
+| The product clause in `findStalePending`                         | T15 "checkout by another cart wanting the held lamps", "a PUT of the held product on another cart", and the gateway-failure row |
+| The checkout recovery hook                                       | The three T15 checkout rows |
+| The PUT recovery hook                                            | The two T15 PUT rows, and the gateway-failure row |
+| The DELETE recovery hook                                         | T15 "a DELETE on the cart" |
+| DELETE's recovery run inside a transaction that holds the cart lock | T15 "a DELETE on the cart": 409 instead of 200, after a `55P03` lock timeout is logged |
+| Pointing the key at the order in reserve                         | T16: the retry gets 500 ("has neither an order nor a response") instead of a replayed 202 |
 
-On the barriers: in T1 and T2 every checkout blocks on `lockProducts` (the lamp row), and without the lock it blocks on the `UPDATE products` instead. In T3 the first request blocks on the cart lock and the other nine on its uncommitted key claim. In T5 all five block on the cart lock. In T6 all five block on the coupon lock in reserve; their product locks don't contend, because the five carts share no product. In T9 all five block on `pg_advisory_xact_lock`, which `pg_stat_activity` reports as `wait_event_type = 'Lock'`, `wait_event = 'advisory'`.
+On the barriers: in T1 and T2 every checkout blocks on `lockProducts` (the lamp row), and without the lock it blocks on the `UPDATE products` instead. In T3 the first request blocks on the cart lock and the other nine on its uncommitted key claim. In T5 all five block on the cart lock. In T6 all five block on the coupon lock in reserve; their product locks don't contend, because the five carts share no product. In T9 all five block on `pg_advisory_xact_lock`, which `pg_stat_activity` reports as `wait_event_type = 'Lock'`, `wait_event = 'advisory'`. In T10 both reconciles block on `finalizeOrder`'s cart lock, after their lock-free read and gateway calls.
 
-Three notes:
+Four notes:
 
 - **Removing the savepoint alone fails no test.** Every check already runs before the first write. With the savepoint kept, even moving the order insert before the checks passes every test, because the final error rolls the insert back. It is defence in depth.
 - **Removing `UNIQUE (milestone)` fails no test (T9 passes, 3 runs out of 3).** The advisory lock already serializes generation, so no duplicate milestone is ever inserted. It is the backstop, like the savepoint.
+- **Checkout's cart clause can't be isolated by a checkout row.** The cart's lines are its order's lines, so the product clause also matches. The PUT of another product and the DELETE are the rows that catch the missing cart clause.
 - **Removing `ORDER BY` from `lockProducts` fails no test (T7 passes, 3 runs out of 3).** A single `id IN (…)` statement scans the products in the same order in every transaction. Locking one line at a time in the cart's own order doesn't change it either, because the cart lines come from the `(cart_id, product_id)` primary key, already in product order. Only an order that really differs between transactions deadlocks. So T7 guards against per-line locking in an arbitrary order, and doesn't prove that `ORDER BY` is needed.
 
 On the barrier: with the cart lock present, every PUT blocks on `SELECT … FROM carts … FOR NO KEY UPDATE`. With it removed, every PUT blocks on the `INSERT INTO cart_items`, whose foreign-key check needs `FOR KEY SHARE` on the cart row that the barrier holds `FOR UPDATE`. So the barrier still lines the requests up, and they fail at the INSERT.
