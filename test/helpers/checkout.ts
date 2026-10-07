@@ -53,6 +53,8 @@ export async function expectOrder(res: Response, status: 201 | 202, { replayed =
 
 export const throwingGateway: PaymentGateway = {
   charge: () => Promise.reject(new Error('connection reset')),
+  retrieve: () => Promise.reject(new Error('connection reset')),
+  cancel: () => Promise.reject(new Error('connection reset')),
 };
 
 export async function keyRow(db: Db, key: string) {

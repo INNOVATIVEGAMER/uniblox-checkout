@@ -19,10 +19,10 @@ function resolvedCouponColumns(resolution: Resolution) {
 /**
  * Moves a pending order to paid or failed, exactly once. A decline adds the reserved units back on top of
  * the current stock, reopens the cart and releases the coupon. Safe to race: whichever caller loses the
- * conditional update changes nothing. The coupon is written last on both paths, after the products, to
- * keep the lock order reserve uses.
+ * conditional update changes nothing and gets null. The coupon is written last on both paths, after the
+ * products, to keep the lock order reserve uses.
  */
-export function finalizeOrder(db: Db, orderId: string, resolution: Resolution): Promise<void> {
+export function finalizeOrder(db: Db, orderId: string, resolution: Resolution): Promise<'paid' | 'failed' | null> {
   return db.transaction(
     async (tx) => {
       const [order] = await tx
@@ -32,12 +32,13 @@ export function finalizeOrder(db: Db, orderId: string, resolution: Resolution): 
       if (!order) throw new Error(`order ${orderId} to finalize has no row`);
       await tx.select({ id: carts.id }).from(carts).where(eq(carts.id, order.cartId)).for('no key update');
 
+      const columns = resolvedColumns(resolution);
       const claimed = await tx
         .update(orders)
-        .set(resolvedColumns(resolution))
+        .set(columns)
         .where(and(eq(orders.id, orderId), eq(orders.status, 'pending_payment')))
         .returning({ id: orders.id });
-      if (claimed.length === 0) return;
+      if (claimed.length === 0) return null;
 
       if (resolution.outcome === 'approved') {
         await tx.update(carts).set({ status: 'checked_out' }).where(eq(carts.id, order.cartId));
@@ -53,6 +54,7 @@ export function finalizeOrder(db: Db, orderId: string, resolution: Resolution): 
       }
 
       if (order.couponId) await tx.update(coupons).set(resolvedCouponColumns(resolution)).where(eq(coupons.id, order.couponId));
+      return columns.status;
     },
     { isolationLevel: 'read committed' },
   );

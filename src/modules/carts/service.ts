@@ -53,6 +53,11 @@ export async function loadCartView(db: Db, cartId: string, couponCode: string | 
   return toCartView(db, cart, { code, percentOff });
 }
 
+export async function cartProductIds(db: Db, cartId: string): Promise<string[]> {
+  const rows = await db.select({ productId: cartItems.productId }).from(cartItems).where(eq(cartItems.cartId, cartId));
+  return rows.map((row) => row.productId);
+}
+
 /**
  * Locks the cart and requires it to be open. The live order is read in a second statement: after a lock
  * wait, a joined row would come from the snapshot taken before the wait, and miss an order that the

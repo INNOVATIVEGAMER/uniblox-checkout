@@ -3,8 +3,10 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { AppError, validate } from '../../errors';
 import { cartParamsSchema } from '../carts/id';
+import { cartProductIds } from '../carts/service';
+import { type RecoveryDeps, recoverStale } from '../payments/recovery';
 import { checkoutBodySchema } from './input';
-import { type CheckoutDeps, checkout } from './service';
+import { checkout } from './service';
 
 const idempotencyHeaderSchema = z.object({ 'Idempotency-Key': z.string().min(1).max(255) });
 
@@ -12,7 +14,7 @@ const requireIdempotencyKey = zValidator('header', idempotencyHeaderSchema, (res
   if (!result.success) throw new AppError('IDEMPOTENCY_KEY_INVALID');
 });
 
-export function checkoutRoutes(deps: CheckoutDeps) {
+export function checkoutRoutes(deps: RecoveryDeps) {
   return new Hono().post(
     '/carts/:id/checkout',
     validate('param', cartParamsSchema),
@@ -20,6 +22,8 @@ export function checkoutRoutes(deps: CheckoutDeps) {
     validate('json', checkoutBodySchema),
     async (c) => {
       const input = { cartId: c.req.valid('param').id, ...c.req.valid('json') };
+      const productIds = await cartProductIds(deps.db, input.cartId);
+      await recoverStale(deps, { scope: 'request', cartId: input.cartId, couponCode: input.couponCode, productIds });
       const { status, body, headers } = await checkout(deps, input, c.req.valid('header')['Idempotency-Key']);
       return Response.json(body, { status, headers });
     },

@@ -8,16 +8,14 @@ import { lockOpenCart } from '../carts/service';
 import { lockAvailableCoupon } from '../coupons/service';
 import { type CheckoutResponse, loadOrderView, toCheckoutResponse } from '../orders/view';
 import { finalizeOrder } from '../payments/finalize';
-import type { PaymentGateway, Resolution } from '../payments/gateway';
+import { type PaymentGateway, type PendingOrder, type Resolution, zeroTotalResolution } from '../payments/gateway';
 import { lockProducts } from '../products/lock';
 import { type Claim, claimKey, completeKeyWithError, requestHash } from './idempotency';
 import type { CheckoutInput } from './input';
 
 export type CheckoutDeps = { db: Db; gateway: PaymentGateway; config: Pick<Config, 'GATEWAY_TIMEOUT_MS'> };
 
-type ReservedOrder = { id: string; totalPaise: number };
-
-type ReserveOutcome = Exclude<Claim, { kind: 'claimed' }> | { kind: 'reserved'; order: ReservedOrder };
+type ReserveOutcome = Exclude<Claim, { kind: 'claimed' }> | { kind: 'reserved'; order: PendingOrder };
 
 /**
  * Phase 1. Every check runs before the first write, inside a savepoint. A final error rolls back to the
@@ -44,7 +42,7 @@ export async function reservePhase(db: Db, input: CheckoutInput, key: string, ha
   return outcome;
 }
 
-async function reserve(sp: Tx, { cartId, couponCode, expectedTotalPaise }: CheckoutInput, key: string): Promise<ReservedOrder> {
+async function reserve(sp: Tx, { cartId, couponCode, expectedTotalPaise }: CheckoutInput, key: string): Promise<PendingOrder> {
   await lockOpenCart(sp, cartId);
 
   const lines = await sp
@@ -109,10 +107,10 @@ async function reserve(sp: Tx, { cartId, couponCode, expectedTotalPaise }: Check
 /** Phase 2. Returns null when the outcome is unknown: the charge may still land, so the reservation is held. */
 async function charge(
   { gateway, config }: CheckoutDeps,
-  order: ReservedOrder,
+  order: PendingOrder,
   paymentToken: string,
 ): Promise<Resolution | null> {
-  if (order.totalPaise === 0) return { outcome: 'approved', paymentRef: null };
+  if (order.totalPaise === 0) return zeroTotalResolution;
   try {
     return await gateway.charge(
       { orderId: order.id, amountPaise: order.totalPaise, paymentToken },

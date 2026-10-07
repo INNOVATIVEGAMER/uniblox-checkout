@@ -203,6 +203,8 @@ Content-Type: application/json
 
 The stock check here is soft: it compares against the stock at this moment and reserves nothing. Checkout makes the authoritative check.
 
+Before its transaction, the PUT recovers any stale pending payment on this cart or holding this product (see [Pending payments](#pending-payments)). So a payment stuck past `PAYMENT_PENDING_TTL_SECONDS` never blocks it with a 409.
+
 When a request breaks more than one rule, the first failing check in this order decides the error: the request shape (400), the cart (404, then 409 for a locked status), the product (404), the stock (409), then the line cap (422).
 
 | Status | Code                   | When                                                                         |
@@ -218,7 +220,7 @@ When a request breaks more than one rule, the first failing check in this order 
 
 ### `DELETE /carts/:id/items/:productId`
 
-Removes the line. Removing a line that isn't in the cart also succeeds, so a retried DELETE gets the same answer.
+Removes the line. Removing a line that isn't in the cart also succeeds, so a retried DELETE gets the same answer. Before its transaction, the DELETE recovers a stale pending payment on this cart.
 
 **200**: the cart view.
 
@@ -243,6 +245,8 @@ Places the order and pays for it, in one request. Stock is reserved, the payment
 | `pm_card_visa`                            | Approved                                    |
 | `pm_card_chargeDeclined`                  | Declined, reason `card_declined`            |
 | `pm_card_chargeDeclinedInsufficientFunds` | Declined, reason `insufficient_funds`       |
+| `tok_timeout_approved`                    | Approved, but the response times out: 202   |
+| `tok_timeout_declined`                    | Declined (`card_declined`), but the response times out: 202 |
 | anything else                             | Declined, reason `invalid_payment_method`   |
 
 - **`couponCode`:** optional, 1–64 characters after trimming, case-insensitive, with `O` read as `0` and `I` or `L` as `1`. One coupon per order. Preview it first with `GET /carts/:id?couponCode=` to get the discounted `expectedTotalPaise`. The coupon is held while the payment runs, redeemed when it is approved, and released when it is declined. A 100% coupon gives a total of 0, which is paid without calling the gateway.
@@ -257,7 +261,7 @@ Idempotency-Key: 8d2b6c1e-checkout-1
 
 **201**: the order was paid. The body is the order view (see `GET /orders/:id`), and the cart is now `checked_out`.
 
-**202**, with `Retry-After: 5`: the payment's outcome is unknown, for example because the gateway timed out. The order stays `pending_payment` and keeps its stock reserved. Retry the same request with the same key to get its current state. Resolving these orders arrives with #5.
+**202**, with `Retry-After: 5`: the payment's outcome is unknown, for example because the gateway timed out. The order stays `pending_payment` and keeps its stock and coupon reserved. To poll, re-POST the same request with the same key: it replays the order's current state, and once the order is older than `PAYMENT_PENDING_TTL_SECONDS` it first resolves it (see [Pending payments](#pending-payments)). `GET /orders/:id` shows the order but never resolves it.
 
 **402 `PAYMENT_FAILED`**: the payment was declined. The order is `failed`, its stock and coupon are released, and the cart is open again, so the client can pay with a new key.
 
@@ -355,3 +359,29 @@ Generates a coupon for the oldest milestone that has none. No body. Concurrent c
 ### `GET /admin/coupons` (admin)
 
 **200**: every coupon view, in milestone order.
+
+### Pending payments
+
+A payment whose outcome is unknown (a 202, a crash, or a failure after the charge) holds its stock and coupon. The hold is never released while the charge could still land. Once the order is older than `PAYMENT_PENDING_TTL_SECONDS`, it is resolved from the gateway's record:
+
+1. **A zero total** is paid, without calling the gateway.
+2. **A charge the gateway knows about** decides it: approved means paid, declined means failed.
+3. **No charge recorded:** the charge is cancelled at the gateway first, so it can never land later. Then the order fails with reason `abandoned`, and its stock, coupon and cart are released.
+4. **The gateway errors:** the order stays pending and is tried again later.
+
+Stale orders are resolved by the requests they would otherwise block, before those requests open a transaction:
+- checkout resolves the cart's own order, an order holding the coupon, and orders holding any product in the cart;
+- PUT resolves the cart's order and orders holding the product;
+- DELETE resolves the cart's order.
+
+A failure on one order is logged, and the request carries on. GET requests never resolve anything.
+
+### `POST /admin/payments/reconcile` (admin)
+
+Resolves every pending order older than `PAYMENT_PENDING_TTL_SECONDS`. Younger orders are left alone. No body.
+
+**200**: `{ "resolved": [{ "orderId": "…", "status": "paid" }], "stillPending": 0 }`.
+- **`resolved`:** each order this call resolved, with its new status, `paid` or `failed`. An order that a concurrent call or the original request finalized first is not listed.
+- **`stillPending`:** every order still `pending_payment` afterwards. That includes orders younger than the TTL, and stale orders that couldn't be resolved, for example because the gateway errored or a lock wait timed out.
+
+A failure on one order never fails the call, so this route has no error responses.

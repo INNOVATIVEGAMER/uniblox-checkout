@@ -221,3 +221,30 @@ Idempotency-Key: coupon-walkthrough-1
 
 ### 409 COUPON_ALREADY_REDEEMED: preview the redeemed coupon
 GET {{base}}/carts/{{payCart.response.body.id}}?couponCode={{coupon.response.body.coupon.code}}
+
+### Timeout walkthrough: a cart with 1 mouse
+# @name timeoutCart
+POST {{base}}/carts
+
+###
+PUT {{base}}/carts/{{timeoutCart.response.body.id}}/items/p_mouse
+Content-Type: application/json
+
+{ "quantity": 1 }
+
+### 202 with Retry-After: the gateway approved the charge, but the response timed out
+POST {{base}}/carts/{{timeoutCart.response.body.id}}/checkout
+Content-Type: application/json
+Idempotency-Key: timeout-1-{{timeoutCart.response.body.id}}
+
+{ "expectedTotalPaise": 129950, "paymentToken": "tok_timeout_approved" }
+
+### Poll: the same key replays 202 until the order is older than PAYMENT_PENDING_TTL_SECONDS, then 201
+POST {{base}}/carts/{{timeoutCart.response.body.id}}/checkout
+Content-Type: application/json
+Idempotency-Key: timeout-1-{{timeoutCart.response.body.id}}
+
+{ "expectedTotalPaise": 129950, "paymentToken": "tok_timeout_approved" }
+
+### Admin: resolve every stale pending order. Before the TTL: { "resolved": [], "stillPending": 1 }
+POST {{base}}/admin/payments/reconcile

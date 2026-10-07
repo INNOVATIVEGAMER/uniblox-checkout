@@ -212,4 +212,38 @@ describe('T30 fake gateway', () => {
     expect(a).not.toEqual(b);
     expect(gateway.charges.size).toBe(2);
   });
+
+  it.each([
+    ['tok_timeout_approved', { outcome: 'approved', paymentRef: expect.stringMatching(/^ch_/) }],
+    ['tok_timeout_declined', { outcome: 'declined', reason: 'card_declined' }],
+  ])('%s records %o, then throws', async (token, expected) => {
+    const gateway = new FakeGateway();
+    await expect(charge(gateway, token)).rejects.toThrow('timed out');
+    expect(await gateway.retrieve('order-1')).toEqual(expected);
+    expect(await charge(gateway, token)).toEqual(expected);
+  });
+
+  it('retrieve() before any charge is not_found', async () => {
+    expect(await new FakeGateway().retrieve('order-1')).toEqual({ outcome: 'not_found' });
+  });
+
+  it('cancel() then charge() is declined with cancelled, and nothing is approved', async () => {
+    const gateway = new FakeGateway();
+    expect(await gateway.cancel('order-1')).toEqual({ outcome: 'cancelled' });
+    expect(await charge(gateway, 'pm_card_visa')).toEqual({ outcome: 'declined', reason: 'cancelled' });
+    expect(await gateway.retrieve('order-1')).toEqual({ outcome: 'declined', reason: 'cancelled' });
+  });
+
+  it('charge() then cancel() returns the charge', async () => {
+    const gateway = new FakeGateway();
+    const charged = await charge(gateway, 'pm_card_visa');
+    expect(await gateway.cancel('order-1')).toEqual(charged);
+    expect(await gateway.retrieve('order-1')).toEqual(charged);
+  });
+
+  it('a second cancel() returns the recorded tombstone', async () => {
+    const gateway = new FakeGateway();
+    await gateway.cancel('order-1');
+    expect(await gateway.cancel('order-1')).toEqual({ outcome: 'declined', reason: 'cancelled' });
+  });
 });
