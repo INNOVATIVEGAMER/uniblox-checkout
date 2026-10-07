@@ -18,6 +18,7 @@ import { couponRow, insertCoupon, withTenPercent } from './helpers/coupons';
 import { resetDb } from './helpers/db';
 import { expectError } from './helpers/errors';
 import { gated } from './helpers/gate';
+import { priceOf } from './helpers/products';
 
 const { app, appWith, db, pool } = createTestApp();
 const { cartWith, getCart } = cartRequests(app);
@@ -25,26 +26,24 @@ const { cartWith, getCart } = cartRequests(app);
 beforeEach(() => resetDb(db));
 afterAll(() => pool.end());
 
-const LAMP_PAISE = 249_900;
-
 const declined = (expectedTotalPaise: number) => ({ expectedTotalPaise, paymentToken: 'pm_card_chargeDeclined' });
 
 describe('a paid checkout', () => {
   it('returns 201 with the order, decrements stock and checks the cart out', async () => {
     const cartId = await cartWith({ p_lamp: 2, p_cable: 1 });
 
-    const order = await expectOrder(await postCheckout(app, cartId, newKey(), visa(2 * LAMP_PAISE + 34_999)), 201);
+    const order = await expectOrder(await postCheckout(app, cartId, newKey(), visa(2 * priceOf('p_lamp') + priceOf('p_cable'))), 201);
 
     expect(order).toMatchObject({
       cartId,
       status: 'paid',
       lines: [
-        { productId: 'p_cable', productName: 'USB-C Cable', unitPricePaise: 34_999, quantity: 1, lineTotalPaise: 34_999 },
-        { productId: 'p_lamp', productName: 'Limited Edition Desk Lamp', unitPricePaise: LAMP_PAISE, quantity: 2, lineTotalPaise: 2 * LAMP_PAISE },
+        { productId: 'p_cable', productName: 'USB-C Cable', unitPricePaise: priceOf('p_cable'), quantity: 1, lineTotalPaise: priceOf('p_cable') },
+        { productId: 'p_lamp', productName: 'Limited Edition Desk Lamp', unitPricePaise: priceOf('p_lamp'), quantity: 2, lineTotalPaise: 2 * priceOf('p_lamp') },
       ],
-      subtotalPaise: 2 * LAMP_PAISE + 34_999,
+      subtotalPaise: 2 * priceOf('p_lamp') + priceOf('p_cable'),
       discountPaise: 0,
-      totalPaise: 2 * LAMP_PAISE + 34_999,
+      totalPaise: 2 * priceOf('p_lamp') + priceOf('p_cable'),
       paymentRef: expect.stringMatching(/^ch_/),
       failureReason: null,
       resolvedAt: expect.any(String),
@@ -60,7 +59,7 @@ describe('T13 a declined payment', () => {
     const gatedApp = appWith(gate.gateway);
     const cartId = await cartWith({ p_lamp: 1 });
     const key = newKey();
-    const pending = postCheckout(gatedApp, cartId, key, declined(LAMP_PAISE));
+    const pending = postCheckout(gatedApp, cartId, key, declined(priceOf('p_lamp')));
 
     const { res, orderId } = await withCleanup(
       async () => {
@@ -82,13 +81,13 @@ describe('T13 a declined payment', () => {
     expect(await stockOf(db, 'p_lamp')).toBe(3);
     expect(await getCart(cartId)).toMatchObject({ status: 'open', orderId: null });
 
-    const replay = await postCheckout(app, cartId, key, declined(LAMP_PAISE));
+    const replay = await postCheckout(app, cartId, key, declined(priceOf('p_lamp')));
     expect(replay.headers.get('Idempotent-Replayed')).toBe('true');
     expect((await expectError(replay, 402, 'PAYMENT_FAILED')).details).toEqual(error.details);
 
-    await expectError(await postCheckout(app, cartId, key, visa(LAMP_PAISE)), 422, 'IDEMPOTENCY_KEY_REUSED');
+    await expectError(await postCheckout(app, cartId, key, visa(priceOf('p_lamp'))), 422, 'IDEMPOTENCY_KEY_REUSED');
 
-    const paid = await expectOrder(await postCheckout(app, cartId, newKey(), visa(LAMP_PAISE)), 201);
+    const paid = await expectOrder(await postCheckout(app, cartId, newKey(), visa(priceOf('p_lamp'))), 201);
     expect(paid.id).not.toBe(orderId);
     expect(await stockOf(db, 'p_lamp')).toBe(2);
     expect(await getCart(cartId)).toMatchObject({ status: 'checked_out', orderId: paid.id });
@@ -100,7 +99,7 @@ describe('T13 a declined payment with a coupon', () => {
     const coupon = await insertCoupon(db);
     const gate = gated(new FakeGateway(), { at: 'before' });
     const cartId = await cartWith({ p_lamp: 1 });
-    const total = withTenPercent(LAMP_PAISE);
+    const total = withTenPercent(priceOf('p_lamp'));
     const key = newKey();
     const pending = postCheckout(appWith(gate.gateway), cartId, key, { ...declined(total), couponCode: coupon.code });
 
@@ -134,13 +133,13 @@ describe('an unknown payment outcome', () => {
     const cartId = await cartWith({ p_lamp: 1 });
     const key = newKey();
 
-    const order = await expectOrder(await postCheckout(throwingApp, cartId, key, visa(LAMP_PAISE)), 202);
+    const order = await expectOrder(await postCheckout(throwingApp, cartId, key, visa(priceOf('p_lamp'))), 202);
     expect(order).toMatchObject({ status: 'pending_payment', paymentRef: null, failureReason: null, resolvedAt: null });
     expect(warn).toHaveBeenCalledOnce();
     expect(await stockOf(db, 'p_lamp')).toBe(2);
     expect(await getCart(cartId)).toMatchObject({ status: 'pending_payment', orderId: order.id });
 
-    const replay = await expectOrder(await postCheckout(throwingApp, cartId, key, visa(LAMP_PAISE)), 202, { replayed: true });
+    const replay = await expectOrder(await postCheckout(throwingApp, cartId, key, visa(priceOf('p_lamp'))), 202, { replayed: true });
     expect(replay).toEqual(order);
     expect(warn).toHaveBeenCalledOnce();
   });
@@ -160,7 +159,7 @@ describe('a zero total', () => {
 describe('T23 order snapshots', () => {
   it('GET /orders/:id is unchanged after the product name and price are edited', async () => {
     const cartId = await cartWith({ p_lamp: 1 });
-    const placed = await expectOrder(await postCheckout(app, cartId, newKey(), visa(LAMP_PAISE)), 201);
+    const placed = await expectOrder(await postCheckout(app, cartId, newKey(), visa(priceOf('p_lamp'))), 201);
 
     const before = await app.request(`/orders/${placed.id}`);
     expect(before.status).toBe(200);
@@ -178,7 +177,7 @@ describe('T18 PATCH stock during a reservation', () => {
   it('a decline adds the reserved unit back on top of the new stock', async () => {
     const gate = gated(new FakeGateway(), { at: 'before' });
     const cartId = await cartWith({ p_lamp: 1 });
-    const pending = postCheckout(appWith(gate.gateway), cartId, newKey(), declined(LAMP_PAISE));
+    const pending = postCheckout(appWith(gate.gateway), cartId, newKey(), declined(priceOf('p_lamp')));
 
     await withCleanup(
       async () => {
@@ -203,7 +202,7 @@ describe('a charge slower than GATEWAY_TIMEOUT_MS', () => {
 
     await withCleanup(
       async () => {
-        const order = await expectOrder(await postCheckout(fast.appWith(gate.gateway), cartId, newKey(), visa(LAMP_PAISE)), 202);
+        const order = await expectOrder(await postCheckout(fast.appWith(gate.gateway), cartId, newKey(), visa(priceOf('p_lamp'))), 202);
         expect(order.status).toBe('pending_payment');
         expect(gate.calls).toBe(1);
         expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ err: expect.objectContaining({ name: 'TimeoutError' }) }));
@@ -222,7 +221,7 @@ describe('finalize failing after the charge', () => {
     const shortApp = short.appWith(gate.gateway);
     const cartId = await cartWith({ p_lamp: 1 });
     const key = newKey();
-    const pending = postCheckout(shortApp, cartId, key, visa(LAMP_PAISE));
+    const pending = postCheckout(shortApp, cartId, key, visa(priceOf('p_lamp')));
     let lock: HeldLock | undefined;
 
     await withCleanup(
@@ -233,7 +232,7 @@ describe('finalize failing after the charge', () => {
         await expectError(await pending, 503, 'LOCK_TIMEOUT');
         await lock.release();
 
-        const order = await expectOrder(await postCheckout(shortApp, cartId, key, visa(LAMP_PAISE)), 202, { replayed: true });
+        const order = await expectOrder(await postCheckout(shortApp, cartId, key, visa(priceOf('p_lamp'))), 202, { replayed: true });
         expect(order.status).toBe('pending_payment');
         expect(await stockOf(db, 'p_lamp')).toBe(2);
         expect(gate.calls).toBe(1);

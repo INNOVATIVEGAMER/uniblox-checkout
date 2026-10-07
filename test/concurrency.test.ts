@@ -12,6 +12,7 @@ import { withCleanup } from './helpers/cleanup';
 import { resetDb } from './helpers/db';
 import { errorBodySchema, expectError } from './helpers/errors';
 import { gated } from './helpers/gate';
+import { priceOf } from './helpers/products';
 import { firstFulfilled, within } from './helpers/within';
 
 const { app, appWith, db, pool } = createTestApp();
@@ -66,8 +67,6 @@ describe('line cap under concurrency', () => {
   });
 });
 
-const LAMP_PAISE = 249_900;
-
 const paidLampQuantity = async () => {
   const [row] = await db
     .select({ n: sql<number>`coalesce(sum(${orderItems.quantity}), 0)::int` })
@@ -85,7 +84,7 @@ describe.each([
     const cartIds = await Promise.all(Array.from({ length: 20 }, () => cartWith({ p_lamp: perCart })));
 
     const responses = await barrier({ table: 'products', id: 'p_lamp' }, 20, () =>
-      cartIds.map((cartId) => postCheckout(app, cartId, newKey(), visa(LAMP_PAISE * perCart))),
+      cartIds.map((cartId) => postCheckout(app, cartId, newKey(), visa(priceOf('p_lamp') * perCart))),
     );
 
     expect(statusCounts(responses)).toEqual({ 201: paid, 409: 20 - paid });
@@ -109,7 +108,7 @@ describe('T3 one key sent 10 times behind a cart barrier, gated before the charg
     const gatedApp = appWith(gate.gateway);
     const cartId = await cartWith({ p_lamp: 1 });
     const key = newKey();
-    const send = () => postCheckout(gatedApp, cartId, key, visa(LAMP_PAISE));
+    const send = () => postCheckout(gatedApp, cartId, key, visa(priceOf('p_lamp')));
     let requests: Promise<Response>[] = [];
 
     await withCleanup(
@@ -147,7 +146,7 @@ describe('T5 five keys on one cart behind a cart barrier, gated', () => {
     const gate = gated(new FakeGateway(), { at: 'before' });
     const gatedApp = appWith(gate.gateway);
     const cartId = await cartWith({ p_lamp: 1 });
-    const send = (key: string) => postCheckout(gatedApp, cartId, key, visa(LAMP_PAISE));
+    const send = (key: string) => postCheckout(gatedApp, cartId, key, visa(priceOf('p_lamp')));
     let requests: Promise<{ key: string; res: Response }>[] = [];
 
     await withCleanup(
@@ -192,7 +191,7 @@ describe('T7 opposite-order carts', () => {
       Array.from({ length: 10 }, () => [cartWith({ p_keyboard: 1, p_mouse: 1 }), cartWith({ p_mouse: 1, p_keyboard: 1 })]).flat(),
     );
 
-    const responses = await Promise.all(carts.map((cartId) => postCheckout(app, cartId, newKey(), visa(499_900 + 129_950))));
+    const responses = await Promise.all(carts.map((cartId) => postCheckout(app, cartId, newKey(), visa(priceOf('p_keyboard') + priceOf('p_mouse')))));
 
     expect(statusCounts(responses)).toEqual({ 201: 20 });
     expect(await stockOf(db, 'p_keyboard')).toBe(30);

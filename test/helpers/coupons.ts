@@ -7,6 +7,7 @@ import { discount } from '../../src/domain/money';
 import type { TestApp } from './app';
 import { cartRequests } from './carts';
 import { expectOrder, newKey, postCheckout, visa } from './checkout';
+import { priceOf } from './products';
 
 export const couponSchema = z.strictObject({
   id: z.uuid(),
@@ -22,8 +23,6 @@ export const generatedSchema = z.strictObject({ coupon: couponSchema, remainingE
 
 export const generateCoupon = async (app: TestApp) => app.request('/admin/coupons', { method: 'POST' });
 
-export const MOUSE_PAISE = 129_950;
-
 export const withTenPercent = (pricePaise: number) => pricePaise - discount(pricePaise, 10);
 
 /** Places `count` paid orders of one mouse each, each on its own cart. */
@@ -31,7 +30,7 @@ export async function payOrders(app: TestApp, count: number): Promise<void> {
   const { cartWith } = cartRequests(app);
   for (let i = 0; i < count; i++) {
     const cartId = await cartWith({ p_mouse: 1 });
-    await expectOrder(await postCheckout(app, cartId, newKey(), visa(MOUSE_PAISE)), 201);
+    await expectOrder(await postCheckout(app, cartId, newKey(), visa(priceOf('p_mouse'))), 201);
   }
 }
 

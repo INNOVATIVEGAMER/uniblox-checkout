@@ -16,13 +16,13 @@ import {
   generateCoupon,
   generatedSchema,
   insertCoupon,
-  MOUSE_PAISE,
   payOrders,
   withTenPercent,
 } from './helpers/coupons';
 import { resetDb, snapshotDb } from './helpers/db';
 import { expectError } from './helpers/errors';
 import { gated } from './helpers/gate';
+import { priceOf } from './helpers/products';
 import { firstFulfilled, within } from './helpers/within';
 
 const N = 2;
@@ -41,10 +41,10 @@ describe('T28 milestones over HTTP', () => {
   it('with n − 1 paid orders, plus a pending and a failed one, gets 409 NO_ELIGIBLE_MILESTONE', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     await payOrders(app, N - 1);
-    const pending = await postCheckout(appWith(throwingGateway), await cartWith({ p_mouse: 1 }), newKey(), visa(MOUSE_PAISE));
+    const pending = await postCheckout(appWith(throwingGateway), await cartWith({ p_mouse: 1 }), newKey(), visa(priceOf('p_mouse')));
     expect(pending.status).toBe(202);
     const failed = await postCheckout(app, await cartWith({ p_mouse: 1 }), newKey(), {
-      expectedTotalPaise: MOUSE_PAISE,
+      expectedTotalPaise: priceOf('p_mouse'),
       paymentToken: 'pm_card_chargeDeclined',
     });
     expect(failed.status).toBe(402);
@@ -182,7 +182,7 @@ describe('T6 five carts with no product in common race for one coupon, behind a 
         await expectError(replayed, 409, 'COUPON_ALREADY_REDEEMED');
 
         const freshCart = await cartWith({ p_keyboard: 1 });
-        const fresh = await postCheckout(app, freshCart, newKey(), { ...visa(withTenPercent(499_900)), couponCode: coupon.code });
+        const fresh = await postCheckout(app, freshCart, newKey(), { ...visa(withTenPercent(priceOf('p_keyboard'))), couponCode: coupon.code });
         await expectError(fresh, 409, 'COUPON_ALREADY_REDEEMED');
 
         expect(await orderCount(db)).toBe(1);
@@ -211,8 +211,8 @@ describe('T19 a 100% coupon', () => {
         const order = await expectOrder(res, 201);
         expect(order).toMatchObject({
           status: 'paid',
-          subtotalPaise: 3 * 34_999,
-          discountPaise: 3 * 34_999,
+          subtotalPaise: 3 * priceOf('p_cable'),
+          discountPaise: 3 * priceOf('p_cable'),
           totalPaise: 0,
           paymentRef: null,
           coupon: { code: coupon.code, percentOff: 100 },
@@ -239,7 +239,7 @@ describe('T24 the coupon preview', () => {
     expect(res.status).toBe(200);
     expect(cartViewSchema.parse(await res.json())).toMatchObject({
       status: 'open',
-      subtotalPaise: 34_999,
+      subtotalPaise: priceOf('p_cable'),
       coupon: { code: coupon.code, percentOff: 10 },
       discountPaise: 3_499,
       totalPaise: 31_500,
@@ -249,14 +249,14 @@ describe('T24 the coupon preview', () => {
 
   it('shows coupon: null and no discount without a code', async () => {
     const cartId = await cartWith({ p_cable: 1 });
-    expect(await getCartView(cartId)).toMatchObject({ coupon: null, discountPaise: 0, totalPaise: 34_999 });
+    expect(await getCartView(cartId)).toMatchObject({ coupon: null, discountPaise: 0, totalPaise: priceOf('p_cable') });
   });
 
   it('gets 409 COUPON_RESERVED for a coupon held by a pending payment, on another cart and on the holding cart', async () => {
     const coupon = await insertCoupon(db);
     const gate = gated(new FakeGateway(), { at: 'before' });
     const holder = await cartWith({ p_mouse: 1 });
-    const pending = postCheckout(appWith(gate.gateway), holder, newKey(), { ...visa(withTenPercent(MOUSE_PAISE)), couponCode: coupon.code });
+    const pending = postCheckout(appWith(gate.gateway), holder, newKey(), { ...visa(withTenPercent(priceOf('p_mouse'))), couponCode: coupon.code });
 
     await withCleanup(
       async () => {

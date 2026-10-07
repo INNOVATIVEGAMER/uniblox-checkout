@@ -18,18 +18,17 @@ import {
   visa,
 } from './helpers/checkout';
 import { withCleanup } from './helpers/cleanup';
-import { couponRow, insertCoupon, MOUSE_PAISE, withTenPercent } from './helpers/coupons';
+import { couponRow, insertCoupon, withTenPercent } from './helpers/coupons';
 import { resetDb, snapshotDb } from './helpers/db';
 import { errorBodySchema, expectError } from './helpers/errors';
 import { gated } from './helpers/gate';
+import { priceOf } from './helpers/products';
 
 const { app, appWith, db, pool } = createTestApp();
 const { cartWith, newCart, putItem, getCart } = cartRequests(app);
 
 beforeEach(() => resetDb(db));
 afterAll(() => pool.end());
-
-const LAMP_PAISE = 249_900;
 
 const patchProduct = (id: string, change: Record<string, unknown>) => sendJson(app, 'PATCH', `/admin/products/${id}`, change);
 
@@ -57,8 +56,8 @@ describe('T20 storage rule: final codes store the response and replay it', () =>
       409,
       async () => {
         const cartId = await cartWith({ p_mouse: 1 });
-        await expectOrder(await postCheckout(app, cartId, newKey(), visa(MOUSE_PAISE)), 201);
-        return { cartId, body: visa(MOUSE_PAISE) };
+        await expectOrder(await postCheckout(app, cartId, newKey(), visa(priceOf('p_mouse'))), 201);
+        return { cartId, body: visa(priceOf('p_mouse')) };
       },
     ],
     [
@@ -67,19 +66,19 @@ describe('T20 storage rule: final codes store the response and replay it', () =>
       async () => {
         const cartId = await cartWith({ p_lamp: 2 });
         await patchProduct('p_lamp', { stock: 1 });
-        return { cartId, body: visa(2 * LAMP_PAISE) };
+        return { cartId, body: visa(2 * priceOf('p_lamp')) };
       },
     ],
-    ['PRICE_CHANGED', 409, async () => ({ cartId: await cartWith({ p_mouse: 1 }), body: visa(MOUSE_PAISE - 1) })],
+    ['PRICE_CHANGED', 409, async () => ({ cartId: await cartWith({ p_mouse: 1 }), body: visa(priceOf('p_mouse') - 1) })],
     ['CART_EMPTY', 422, async () => ({ cartId: await newCart(), body: visa(0) })],
-    ['COUPON_INVALID', 422, async () => ({ cartId: await cartWith({ p_mouse: 1 }), body: { ...visa(MOUSE_PAISE), couponCode: 'SAVE10-NOPE' } })],
+    ['COUPON_INVALID', 422, async () => ({ cartId: await cartWith({ p_mouse: 1 }), body: { ...visa(priceOf('p_mouse')), couponCode: 'SAVE10-NOPE' } })],
     [
       'COUPON_ALREADY_REDEEMED',
       409,
       async () => {
         const coupon = await insertCoupon(db);
         await db.update(coupons).set({ status: 'redeemed', redeemedAt: new Date() }).where(eq(coupons.id, coupon.id));
-        return { cartId: await cartWith({ p_mouse: 1 }), body: { ...visa(withTenPercent(MOUSE_PAISE)), couponCode: coupon.code } };
+        return { cartId: await cartWith({ p_mouse: 1 }), body: { ...visa(withTenPercent(priceOf('p_mouse'))), couponCode: coupon.code } };
       },
     ],
   ])('%s (%i)', async (code, status, setup) => {
@@ -100,8 +99,8 @@ describe('T20 storage rule: final codes store the response and replay it', () =>
 
   it('CART_CHECKED_OUT carries the paid order id', async () => {
     const cartId = await cartWith({ p_mouse: 1 });
-    const paid = await expectOrder(await postCheckout(app, cartId, newKey(), visa(MOUSE_PAISE)), 201);
-    const error = await expectStoredFinal(cartId, newKey(), visa(MOUSE_PAISE), 409, 'CART_CHECKED_OUT');
+    const paid = await expectOrder(await postCheckout(app, cartId, newKey(), visa(priceOf('p_mouse'))), 201);
+    const error = await expectStoredFinal(cartId, newKey(), visa(priceOf('p_mouse')), 409, 'CART_CHECKED_OUT');
     expect(error.details).toEqual({ orderId: paid.id });
   });
 });
@@ -114,7 +113,7 @@ describe('T20 storage rule: a decline is replayed from the order', () => {
   ])('%s gives 402 with reason %s, and the same key replays it', async (paymentToken, reason) => {
     const cartId = await cartWith({ p_mouse: 1 });
     const key = newKey();
-    const body = { expectedTotalPaise: MOUSE_PAISE, paymentToken };
+    const body = { expectedTotalPaise: priceOf('p_mouse'), paymentToken };
 
     const first = await postCheckout(app, cartId, key, body);
     expect(first.headers.get('Idempotent-Replayed')).toBeNull();
@@ -135,13 +134,13 @@ describe('T20 storage rule: transient codes and 400s leave no key row', () => {
     const gate = gated(new FakeGateway(), { at: 'before' });
     const gatedApp = appWith(gate.gateway);
     const cartId = await cartWith({ p_mouse: 1 });
-    const first = postCheckout(gatedApp, cartId, newKey(), visa(MOUSE_PAISE));
+    const first = postCheckout(gatedApp, cartId, newKey(), visa(priceOf('p_mouse')));
 
     await withCleanup(
       async () => {
         await gate.entered();
         const key = newKey();
-        const res = await postCheckout(gatedApp, cartId, key, visa(MOUSE_PAISE));
+        const res = await postCheckout(gatedApp, cartId, key, visa(priceOf('p_mouse')));
         expect(res.headers.get('Idempotent-Replayed')).toBeNull();
         await expectError(res, 409, 'CART_PAYMENT_PENDING');
         expect(await keyRow(db, key)).toBeUndefined();
@@ -155,7 +154,7 @@ describe('T20 storage rule: transient codes and 400s leave no key row', () => {
     const coupon = await insertCoupon(db);
     const gate = gated(new FakeGateway(), { at: 'before' });
     const gatedApp = appWith(gate.gateway);
-    const total = withTenPercent(MOUSE_PAISE);
+    const total = withTenPercent(priceOf('p_mouse'));
     const first = postCheckout(gatedApp, await cartWith({ p_mouse: 1 }), newKey(), { ...visa(total), couponCode: coupon.code });
 
     await withCleanup(
@@ -174,7 +173,7 @@ describe('T20 storage rule: transient codes and 400s leave no key row', () => {
 
   it.each([
     ['VALIDATION_ERROR', { expectedTotalPaise: -1, paymentToken: 'pm_card_visa' }, newKey()],
-    ['IDEMPOTENCY_KEY_INVALID', visa(MOUSE_PAISE), ''],
+    ['IDEMPOTENCY_KEY_INVALID', visa(priceOf('p_mouse')), ''],
   ] as const)('400 %s stores nothing', async (code, body, key) => {
     const cartId = await cartWith({ p_mouse: 1 });
     await expectError(await postCheckout(app, cartId, key, body), 400, code);
@@ -184,10 +183,10 @@ describe('T20 storage rule: transient codes and 400s leave no key row', () => {
   it('IDEMPOTENCY_KEY_REUSED leaves the existing key row unchanged and is not a replay', async () => {
     const cartId = await cartWith({ p_mouse: 1 });
     const key = newKey();
-    await expectOrder(await postCheckout(app, cartId, key, visa(MOUSE_PAISE)), 201);
+    await expectOrder(await postCheckout(app, cartId, key, visa(priceOf('p_mouse'))), 201);
     const before = await keyRow(db, key);
 
-    const res = await postCheckout(app, cartId, key, { expectedTotalPaise: MOUSE_PAISE, paymentToken: 'pm_card_chargeDeclined' });
+    const res = await postCheckout(app, cartId, key, { expectedTotalPaise: priceOf('p_mouse'), paymentToken: 'pm_card_chargeDeclined' });
     expect(res.headers.get('Idempotent-Replayed')).toBeNull();
     await expectError(res, 422, 'IDEMPOTENCY_KEY_REUSED');
     expect(await keyRow(db, key)).toEqual(before);
@@ -201,7 +200,7 @@ describe('T21 price changed after add', () => {
     expect((await patchProduct('p_lamp', { pricePaise: 200_000 })).status).toBe(200);
     const key = newKey();
 
-    const error = await expectStoredFinal(cartId, key, visa(LAMP_PAISE), 409, 'PRICE_CHANGED');
+    const error = await expectStoredFinal(cartId, key, visa(priceOf('p_lamp')), 409, 'PRICE_CHANGED');
     expect(error.details).toEqual({ subtotalPaise: 200_000, discountPaise: 0, totalPaise: 200_000 });
     expect(await orderCount(db)).toBe(0);
     expect(await stockOf(db, 'p_lamp')).toBe(3);
@@ -234,7 +233,7 @@ describe('T22 a stock failure consumes nothing', () => {
     const cartId = await cartWith({ p_lamp: 2, p_monitor: 3, p_mouse: 1 });
     await patchProduct('p_lamp', { stock: 1 });
     await patchProduct('p_monitor', { stock: 2 });
-    const total = 2 * LAMP_PAISE + 3 * 1_899_900 + MOUSE_PAISE;
+    const total = 2 * priceOf('p_lamp') + 3 * priceOf('p_monitor') + priceOf('p_mouse');
     const before = await snapshotDb(db);
     const key = newKey();
 
@@ -265,7 +264,7 @@ describe('T22 a stock failure with a coupon', () => {
     const coupon = await insertCoupon(db);
     const cartId = await cartWith({ p_lamp: 2 });
     await patchProduct('p_lamp', { stock: 1 });
-    const body = { ...visa(withTenPercent(2 * LAMP_PAISE)), couponCode: coupon.code };
+    const body = { ...visa(withTenPercent(2 * priceOf('p_lamp'))), couponCode: coupon.code };
     const key = newKey();
 
     await expectStoredFinal(cartId, key, body, 409, 'INSUFFICIENT_STOCK');
@@ -280,14 +279,14 @@ describe('T22 a stock failure with a coupon', () => {
 
 describe('T4 one key, different requests', () => {
   it.each([
-    ['another cart', async () => ({ cartId: await cartWith({ p_mouse: 1 }), body: visa(MOUSE_PAISE) })],
-    ['another total', async (cartId: string) => ({ cartId, body: visa(MOUSE_PAISE + 1) })],
-    ['another token', async (cartId: string) => ({ cartId, body: { expectedTotalPaise: MOUSE_PAISE, paymentToken: 'pm_card_chargeDeclined' } })],
-    ['a coupon', async (cartId: string) => ({ cartId, body: { ...visa(MOUSE_PAISE), couponCode: 'SAVE10-ANY' } })],
+    ['another cart', async () => ({ cartId: await cartWith({ p_mouse: 1 }), body: visa(priceOf('p_mouse')) })],
+    ['another total', async (cartId: string) => ({ cartId, body: visa(priceOf('p_mouse') + 1) })],
+    ['another token', async (cartId: string) => ({ cartId, body: { expectedTotalPaise: priceOf('p_mouse'), paymentToken: 'pm_card_chargeDeclined' } })],
+    ['a coupon', async (cartId: string) => ({ cartId, body: { ...visa(priceOf('p_mouse')), couponCode: 'SAVE10-ANY' } })],
   ])('the same key with %s gets 422 IDEMPOTENCY_KEY_REUSED and leaves the key row unchanged', async (_label, other) => {
     const cartId = await cartWith({ p_mouse: 1 });
     const key = newKey();
-    await expectOrder(await postCheckout(app, cartId, key, visa(MOUSE_PAISE)), 201);
+    await expectOrder(await postCheckout(app, cartId, key, visa(priceOf('p_mouse'))), 201);
     const before = await keyRow(db, key);
 
     const second = await other(cartId);
@@ -299,9 +298,9 @@ describe('T4 one key, different requests', () => {
   it('the same key on the uppercase form of the cart id replays instead of returning 422', async () => {
     const cartId = await cartWith({ p_mouse: 1 });
     const key = newKey();
-    const paid = await expectOrder(await postCheckout(app, cartId, key, visa(MOUSE_PAISE)), 201);
+    const paid = await expectOrder(await postCheckout(app, cartId, key, visa(priceOf('p_mouse'))), 201);
 
-    const replay = await postCheckout(app, cartId.toUpperCase(), key, visa(MOUSE_PAISE));
+    const replay = await postCheckout(app, cartId.toUpperCase(), key, visa(priceOf('p_mouse')));
     expect(await expectOrder(replay, 201, { replayed: true })).toEqual(paid);
   });
 
@@ -309,7 +308,7 @@ describe('T4 one key, different requests', () => {
     const coupon = await insertCoupon(db);
     const cartId = await cartWith({ p_mouse: 1 });
     const key = newKey();
-    const body = { ...visa(withTenPercent(MOUSE_PAISE)), couponCode: coupon.code };
+    const body = { ...visa(withTenPercent(priceOf('p_mouse'))), couponCode: coupon.code };
     const paid = await expectOrder(await postCheckout(app, cartId, key, body), 201);
 
     const replay = await postCheckout(app, cartId, key, { ...body, couponCode: `  ${coupon.code.toLowerCase()} ` });
@@ -321,7 +320,7 @@ describe('T4 one key, different requests', () => {
     const key = newKey();
 
     const responses = await barrier({ table: 'products', id: 'p_lamp' }, 2, () =>
-      cartIds.map((cartId) => postCheckout(app, cartId, key, visa(LAMP_PAISE))),
+      cartIds.map((cartId) => postCheckout(app, cartId, key, visa(priceOf('p_lamp')))),
     );
 
     expect(responses.map((res) => res.status).sort()).toEqual([201, 422]);
@@ -338,14 +337,14 @@ describe('T17 a lock timeout during reserve', () => {
 
     await withCleanup(
       async () => {
-        await expectError(await postCheckout(short.app, cartId, key, visa(LAMP_PAISE)), 503, 'LOCK_TIMEOUT');
+        await expectError(await postCheckout(short.app, cartId, key, visa(priceOf('p_lamp'))), 503, 'LOCK_TIMEOUT');
         expect(await keyRow(db, key)).toBeUndefined();
         expect(await orderCount(db)).toBe(0);
         expect(await stockOf(db, 'p_lamp')).toBe(3);
         expect((await getCart(cartId)).status).toBe('open');
         await lock.release();
 
-        await expectOrder(await postCheckout(short.app, cartId, key, visa(LAMP_PAISE)), 201);
+        await expectOrder(await postCheckout(short.app, cartId, key, visa(priceOf('p_lamp'))), 201);
       },
       lock.release,
       () => short.pool.end(),
