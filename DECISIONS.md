@@ -44,7 +44,7 @@ _Filled in by each issue as it resolves them: checkout (#3), coupons (#4), pendi
 - **A decline reopens the cart.** The order is `failed`, its stock is released, and the cart is `open` with its lines intact. The same key replays the 402, and a new key can pay.
 - **An unknown payment outcome holds the reservation.** When the gateway throws or times out, the order stays `pending_payment` and the response is 202 with `Retry-After: 5`. Retrying the same key replays the current state. Resolving these orders is #5.
 - **A zero total is never charged.** A cart can total 0 through a product priced at 0, or with a 100% coupon (T19). It is paid with `payment_ref` null and no gateway call.
-- **The cart ID is lowercased before hashing.** Postgres compares UUIDs case-insensitively, so without this the same cart sent in upper case would be a different request and get 422. The coupon code is trimmed and uppercased for the same reason.
+- **The cart ID is lowercased before hashing.** Postgres compares UUIDs case-insensitively, so without this the same cart sent in upper case would be a different request and get 422. The coupon code is normalised by `couponCodeSchema` for the same reason.
 
 ### Coupons
 
@@ -326,7 +326,7 @@ For HTTP, Express and Fastify were the alternatives to Hono. For validation, the
 
 ### Decision: Coupon codes in uppercase Crockford base32
 
-**Context:** Codes are typed by people and normalised by one shared schema, `couponCodeSchema` (trim, then uppercase), used by the checkout body and the preview query.
+**Context:** Codes are typed by people and normalised by one shared schema, `couponCodeSchema` (trim, uppercase, then Crockford's decoding of `I` and `L` as `1` and `O` as `0`), used by the checkout body and the preview query.
 
 **Options considered:** a mixed-case random suffix; sequential codes; an uppercase-only alphabet.
 
@@ -335,10 +335,10 @@ For HTTP, Express and Fastify were the alternatives to Hono. For validation, the
 **Why:**
 
 - A mixed-case code would never match after the schema uppercases the input.
-- Crockford's alphabet drops the letters people confuse with digits.
+- Crockford's alphabet drops the letters people confuse with digits, and its decoding reads a typed `I`, `L` or `O` as the digit it was mistaken for. No generated code contains those letters, the `SAVE{x}-M{k}-` prefix included, so the mapping never changes a real code.
 - The random suffix means a bearer code can't be guessed from its milestone. 32^8 ≈ 10^12 values make the collision retry a formality.
 
-**Consequences:** codes are case-insensitive for clients. The length bound (1 to 64 after trimming) is a 400; any code inside it that doesn't exist is `422 COUPON_INVALID`.
+**Consequences:** codes are case-insensitive for clients, and `O`/`0` and `I`/`L`/`1` are interchangeable. The length bound (1 to 64 after trimming) is a 400; any code inside it that doesn't exist is `422 COUPON_INVALID`.
 
 _Further decisions arrive with the issues that make them:_
 
@@ -505,6 +505,7 @@ Each test that guards an enforcement was run once with that enforcement removed,
 | The coupon discount in `priceLines`                              | T6, T19, T21, T22, T24, and T4 lowercase: every coupon checkout gets `PRICE_CHANGED` |
 | `couponCode` in the request hash                                 | T4 "the same key with a coupon" replays 201 instead of 422; T13's same key without the coupon replays instead of 422 |
 | `.toUpperCase()` in `couponCodeSchema`                           | T4 lowercase coupon code, T21 and T24 previews, and the unit test |
+| The Crockford alias `.overwrite` in `couponCodeSchema`           | The unit test "reads a typed I or L as 1 and O as 0"         |
 | `pg_advisory_xact_lock` in generation                            | T9 fails with "1 request(s) finished without blocking on the barrier". Without a barrier, 5 parallel calls over 4 paid orders gave `[201, 500, 500, 500, 500]` 9 runs out of 10 (23505 on `coupons_milestone_unique`) |
 
 On the barriers: in T1 and T2 every checkout blocks on `lockProducts` (the lamp row), and without the lock it blocks on the `UPDATE products` instead. In T3 the first request blocks on the cart lock and the other nine on its uncommitted key claim. In T5 all five block on the cart lock. In T6 all five block on the coupon lock in reserve; their product locks don't contend, because the five carts share no product. In T9 all five block on `pg_advisory_xact_lock`, which `pg_stat_activity` reports as `wait_event_type = 'Lock'`, `wait_event = 'advisory'`.
@@ -512,7 +513,7 @@ On the barriers: in T1 and T2 every checkout blocks on `lockProducts` (the lamp 
 Three notes:
 
 - **Removing the savepoint alone fails no test.** Every check already runs before the first write. With the savepoint kept, even moving the order insert before the checks passes every test, because the final error rolls the insert back. It is defence in depth.
-- **Removing `UNIQUE (milestone)` fails no test (T9 passes, 3 runs out of 3).** The advisory lock already serializes generation, so no duplicate milestone is ever inserted. It is the backstop, like the savepoint. `architecture.html` lists T9 as failing without it; that row is wrong.
+- **Removing `UNIQUE (milestone)` fails no test (T9 passes, 3 runs out of 3).** The advisory lock already serializes generation, so no duplicate milestone is ever inserted. It is the backstop, like the savepoint.
 - **Removing `ORDER BY` from `lockProducts` fails no test (T7 passes, 3 runs out of 3).** A single `id IN (…)` statement scans the products in the same order in every transaction. Locking one line at a time in the cart's own order doesn't change it either, because the cart lines come from the `(cart_id, product_id)` primary key, already in product order. Only an order that really differs between transactions deadlocks. So T7 guards against per-line locking in an arbitrary order, and doesn't prove that `ORDER BY` is needed.
 
 On the barrier: with the cart lock present, every PUT blocks on `SELECT … FROM carts … FOR NO KEY UPDATE`. With it removed, every PUT blocks on the `INSERT INTO cart_items`, whose foreign-key check needs `FOR KEY SHARE` on the cart row that the barrier holds `FOR UPDATE`. So the barrier still lines the requests up, and they fail at the INSERT.

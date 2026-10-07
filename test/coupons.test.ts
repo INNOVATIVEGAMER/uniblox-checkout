@@ -3,7 +3,6 @@ import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { coupons } from '../src/db/schema';
 import { SEED_PRODUCTS } from '../src/db/seed';
-import { discount } from '../src/domain/money';
 import { COUPON_GENERATION_LOCK, generateCoupon as generateCouponDirect } from '../src/modules/coupons/service';
 import { FakeGateway } from '../src/modules/payments/fake-gateway';
 import { createTestApp } from './helpers/app';
@@ -11,7 +10,16 @@ import { barrier, lineUp } from './helpers/barrier';
 import { cartRequests, cartViewSchema } from './helpers/carts';
 import { expectOrder, idleInTransaction, newKey, orderCount, postCheckout, throwingGateway, visa } from './helpers/checkout';
 import { withCleanup } from './helpers/cleanup';
-import { couponRow, couponSchema, generateCoupon, generatedSchema, insertCoupon, payOrders } from './helpers/coupons';
+import {
+  couponRow,
+  couponSchema,
+  generateCoupon,
+  generatedSchema,
+  insertCoupon,
+  MOUSE_PAISE,
+  payOrders,
+  withTenPercent,
+} from './helpers/coupons';
 import { resetDb, snapshotDb } from './helpers/db';
 import { expectError } from './helpers/errors';
 import { gated } from './helpers/gate';
@@ -23,8 +31,6 @@ const { cartWith } = cartRequests(app);
 
 beforeEach(() => resetDb(db));
 afterAll(() => pool.end());
-
-const MOUSE_PAISE = 129_950;
 
 async function expectGenerated(res: Response) {
   expect(res.status).toBe(201);
@@ -125,8 +131,6 @@ describe('GET /admin/coupons', () => {
     expect(await listCoupons()).toEqual([first.coupon, second.coupon]);
   });
 });
-
-const withTenPercent = (pricePaise: number) => pricePaise - discount(pricePaise, 10);
 
 describe('T6 five carts with no product in common race for one coupon, behind a coupon barrier, gated', () => {
   it('gives 4 × 409 COUPON_RESERVED while the coupon is reserved, then one 201, and the coupon is redeemed for good', async () => {
@@ -252,7 +256,7 @@ describe('T24 the coupon preview', () => {
     const coupon = await insertCoupon(db);
     const gate = gated(new FakeGateway(), { at: 'before' });
     const holder = await cartWith({ p_mouse: 1 });
-    const pending = postCheckout(appWith(gate.gateway), holder, newKey(), { ...visa(MOUSE_PAISE - 12_995), couponCode: coupon.code });
+    const pending = postCheckout(appWith(gate.gateway), holder, newKey(), { ...visa(withTenPercent(MOUSE_PAISE)), couponCode: coupon.code });
 
     await withCleanup(
       async () => {

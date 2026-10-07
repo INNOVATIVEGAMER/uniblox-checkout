@@ -48,7 +48,7 @@ describe('T28 milestones', () => {
     ['n paid orders', { paidOrders: 5, lastMilestone: 0 }, { next: 1, eligible: true, remainingEligible: 0, nextMilestoneAt: 5 }],
     ['2n paid orders, none rewarded: the oldest first', { paidOrders: 10, lastMilestone: 0 }, { next: 1, eligible: true, remainingEligible: 1, nextMilestoneAt: 5 }],
     ['2n paid orders, the first rewarded', { paidOrders: 10, lastMilestone: 1 }, { next: 2, eligible: true, remainingEligible: 0, nextMilestoneAt: 10 }],
-    ['2n paid orders, both rewarded', { paidOrders: 11, lastMilestone: 2 }, { next: 3, eligible: false, remainingEligible: 0, nextMilestoneAt: 15 }],
+    ['2n + 1 paid orders, both rewarded', { paidOrders: 11, lastMilestone: 2 }, { next: 3, eligible: false, remainingEligible: 0, nextMilestoneAt: 15 }],
   ])('%s', (_label, input, expected) => {
     expect(milestoneProgress({ n: 5, ...input })).toEqual(expected);
   });
@@ -66,6 +66,10 @@ describe('coupon codes', () => {
 
   it('normalises input by trimming and uppercasing', () => {
     expect(couponCodeSchema.parse('  save10-m1-abc  ')).toBe('SAVE10-M1-ABC');
+  });
+
+  it('reads a typed I or L as 1 and O as 0, as Crockford decoding does', () => {
+    expect(couponCodeSchema.parse('save10-m1-oil0')).toBe('SAVE10-M1-0110');
   });
 
   it.each(['', '   ', 'A'.repeat(65)])('rejects %j', (input) => {

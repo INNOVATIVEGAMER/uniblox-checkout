@@ -14,7 +14,7 @@ import {
   visa,
 } from './helpers/checkout';
 import { withCleanup } from './helpers/cleanup';
-import { couponRow, insertCoupon } from './helpers/coupons';
+import { couponRow, insertCoupon, withTenPercent } from './helpers/coupons';
 import { resetDb } from './helpers/db';
 import { expectError } from './helpers/errors';
 import { gated } from './helpers/gate';
@@ -100,7 +100,7 @@ describe('T13 a declined payment with a coupon', () => {
     const coupon = await insertCoupon(db);
     const gate = gated(new FakeGateway(), { at: 'before' });
     const cartId = await cartWith({ p_lamp: 1 });
-    const total = LAMP_PAISE - 24_990;
+    const total = withTenPercent(LAMP_PAISE);
     const key = newKey();
     const pending = postCheckout(appWith(gate.gateway), cartId, key, { ...declined(total), couponCode: coupon.code });
 

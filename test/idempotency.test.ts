@@ -18,7 +18,7 @@ import {
   visa,
 } from './helpers/checkout';
 import { withCleanup } from './helpers/cleanup';
-import { couponRow, insertCoupon } from './helpers/coupons';
+import { couponRow, insertCoupon, MOUSE_PAISE, withTenPercent } from './helpers/coupons';
 import { resetDb, snapshotDb } from './helpers/db';
 import { errorBodySchema, expectError } from './helpers/errors';
 import { gated } from './helpers/gate';
@@ -30,7 +30,6 @@ beforeEach(() => resetDb(db));
 afterAll(() => pool.end());
 
 const LAMP_PAISE = 249_900;
-const MOUSE_PAISE = 129_950;
 
 const patchProduct = (id: string, change: Record<string, unknown>) => sendJson(app, 'PATCH', `/admin/products/${id}`, change);
 
@@ -80,7 +79,7 @@ describe('T20 storage rule: final codes store the response and replay it', () =>
       async () => {
         const coupon = await insertCoupon(db);
         await db.update(coupons).set({ status: 'redeemed', redeemedAt: new Date() }).where(eq(coupons.id, coupon.id));
-        return { cartId: await cartWith({ p_mouse: 1 }), body: { ...visa(MOUSE_PAISE - 12_995), couponCode: coupon.code } };
+        return { cartId: await cartWith({ p_mouse: 1 }), body: { ...visa(withTenPercent(MOUSE_PAISE)), couponCode: coupon.code } };
       },
     ],
   ])('%s (%i)', async (code, status, setup) => {
@@ -156,7 +155,7 @@ describe('T20 storage rule: transient codes and 400s leave no key row', () => {
     const coupon = await insertCoupon(db);
     const gate = gated(new FakeGateway(), { at: 'before' });
     const gatedApp = appWith(gate.gateway);
-    const total = MOUSE_PAISE - 12_995;
+    const total = withTenPercent(MOUSE_PAISE);
     const first = postCheckout(gatedApp, await cartWith({ p_mouse: 1 }), newKey(), { ...visa(total), couponCode: coupon.code });
 
     await withCleanup(
@@ -266,7 +265,7 @@ describe('T22 a stock failure with a coupon', () => {
     const coupon = await insertCoupon(db);
     const cartId = await cartWith({ p_lamp: 2 });
     await patchProduct('p_lamp', { stock: 1 });
-    const body = { ...visa(2 * LAMP_PAISE - 49_980), couponCode: coupon.code };
+    const body = { ...visa(withTenPercent(2 * LAMP_PAISE)), couponCode: coupon.code };
     const key = newKey();
 
     await expectStoredFinal(cartId, key, body, 409, 'INSUFFICIENT_STOCK');
@@ -310,7 +309,7 @@ describe('T4 one key, different requests', () => {
     const coupon = await insertCoupon(db);
     const cartId = await cartWith({ p_mouse: 1 });
     const key = newKey();
-    const body = { ...visa(MOUSE_PAISE - 12_995), couponCode: coupon.code };
+    const body = { ...visa(withTenPercent(MOUSE_PAISE)), couponCode: coupon.code };
     const paid = await expectOrder(await postCheckout(app, cartId, key, body), 201);
 
     const replay = await postCheckout(app, cartId, key, { ...body, couponCode: `  ${coupon.code.toLowerCase()} ` });

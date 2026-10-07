@@ -11,7 +11,7 @@ function resolvedColumns(resolution: Resolution) {
   return { status: 'failed' as const, failureReason: resolution.reason, resolvedAt: sql`now()` };
 }
 
-function couponColumns(resolution: Resolution) {
+function resolvedCouponColumns(resolution: Resolution) {
   if (resolution.outcome === 'approved') return { status: 'redeemed' as const, redeemedAt: sql`now()` };
   return { status: 'available' as const };
 }
@@ -52,7 +52,7 @@ export function finalizeOrder(db: Db, orderId: string, resolution: Resolution): 
         await tx.update(carts).set({ status: 'open' }).where(eq(carts.id, order.cartId));
       }
 
-      if (order.couponId) await tx.update(coupons).set(couponColumns(resolution)).where(eq(coupons.id, order.couponId));
+      if (order.couponId) await tx.update(coupons).set(resolvedCouponColumns(resolution)).where(eq(coupons.id, order.couponId));
     },
     { isolationLevel: 'read committed' },
   );

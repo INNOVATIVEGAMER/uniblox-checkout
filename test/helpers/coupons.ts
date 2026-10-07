@@ -3,6 +3,7 @@ import { expect } from 'vitest';
 import { z } from 'zod';
 import type { Db } from '../../src/db/client';
 import { COUPON_STATUSES, coupons } from '../../src/db/schema';
+import { discount } from '../../src/domain/money';
 import type { TestApp } from './app';
 import { cartRequests } from './carts';
 import { expectOrder, newKey, postCheckout, visa } from './checkout';
@@ -21,7 +22,9 @@ export const generatedSchema = z.strictObject({ coupon: couponSchema, remainingE
 
 export const generateCoupon = async (app: TestApp) => app.request('/admin/coupons', { method: 'POST' });
 
-const MOUSE_PAISE = 129_950;
+export const MOUSE_PAISE = 129_950;
+
+export const withTenPercent = (pricePaise: number) => pricePaise - discount(pricePaise, 10);
 
 /** Places `count` paid orders of one mouse each, each on its own cart. */
 export async function payOrders(app: TestApp, count: number): Promise<void> {
@@ -35,11 +38,11 @@ export async function payOrders(app: TestApp, count: number): Promise<void> {
 let nextMilestone = 1;
 
 /** Inserts a coupon directly, skipping the milestone rule, for tests about redemption. */
-export async function insertCoupon(db: Db, { percentOff = 10, code }: { percentOff?: number; code?: string } = {}) {
+export async function insertCoupon(db: Db) {
   const milestone = nextMilestone++;
   const [coupon] = await db
     .insert(coupons)
-    .values({ code: code ?? `SAVE${percentOff}-M${milestone}-TEST0000`, milestone, percentOff })
+    .values({ code: `SAVE10-M${milestone}-TEST0000`, milestone, percentOff: 10 })
     .returning({ id: coupons.id, code: coupons.code, percentOff: coupons.percentOff });
   if (!coupon) throw new Error('INSERT … RETURNING produced no row');
   return coupon;

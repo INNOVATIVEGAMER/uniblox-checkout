@@ -171,7 +171,7 @@ Creates an empty cart. No body.
 
 **200**: the cart view, in any status.
 
-With `couponCode`, the view previews the coupon: it shows `coupon`, the discount and the discounted total, and reserves nothing. The preview succeeds only for an available coupon. Otherwise it returns the same error checkout would, so it never shows a total that checkout would reject. The code is trimmed and uppercased, so `save10-m1-…` works.
+With `couponCode`, the view previews the coupon: it shows `coupon`, the discount and the discounted total, and reserves nothing. The preview succeeds only for an available coupon. Otherwise it returns the same error checkout would, so it never shows a total that checkout would reject. The code is trimmed and uppercased, and a typed `O`, `I` or `L` reads as `0`, `1` or `1`, so `save10-m1-…` works.
 
 ```http
 GET /carts/5f0c6a0e-3b1d-4c2a-9e7f-1a2b3c4d5e6f?couponCode=SAVE10-M1-7K3QZ9XA
@@ -245,7 +245,7 @@ Places the order and pays for it, in one request. Stock is reserved, the payment
 | `pm_card_chargeDeclinedInsufficientFunds` | Declined, reason `insufficient_funds`       |
 | anything else                             | Declined, reason `invalid_payment_method`   |
 
-- **`couponCode`:** optional, 1–64 characters after trimming, case-insensitive. One coupon per order. Preview it first with `GET /carts/:id?couponCode=` to get the discounted `expectedTotalPaise`. The coupon is held while the payment runs, redeemed when it is approved, and released when it is declined. A 100% coupon gives a total of 0, which is paid without calling the gateway.
+- **`couponCode`:** optional, 1–64 characters after trimming, case-insensitive, with `O` read as `0` and `I` or `L` as `1`. One coupon per order. Preview it first with `GET /carts/:id?couponCode=` to get the discounted `expectedTotalPaise`. The coupon is held while the payment runs, redeemed when it is approved, and released when it is declined. A 100% coupon gives a total of 0, which is paid without calling the gateway.
 
 ```http
 POST /carts/5f0c6a0e-3b1d-4c2a-9e7f-1a2b3c4d5e6f/checkout

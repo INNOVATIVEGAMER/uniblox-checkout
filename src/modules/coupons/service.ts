@@ -23,7 +23,7 @@ export const couponColumns = {
 };
 
 /** The availability rule shared by checkout and the cart preview, so both return the same error. */
-export function availableCoupon<Coupon extends { status: typeof coupons.$inferSelect.status }>(coupon: Coupon | undefined): Coupon {
+function availableCoupon(coupon: typeof coupons.$inferSelect | undefined) {
   if (!coupon) throw new AppError('COUPON_INVALID');
   if (coupon.status === 'redeemed') throw new AppError('COUPON_ALREADY_REDEEMED');
   if (coupon.status === 'reserved') throw new AppError('COUPON_RESERVED');
@@ -50,7 +50,7 @@ export function generateCoupon(db: Db, config: CouponConfig, newCode = generateC
       await tx.execute(sql`SELECT pg_advisory_xact_lock(${COUPON_GENERATION_LOCK})`);
 
       const paidOrders = await tx.$count(orders, eq(orders.status, 'paid'));
-      const [last] = await tx.select({ milestone: sql<number>`coalesce(max(${coupons.milestone}), 0)`.mapWith(Number) }).from(coupons);
+      const [last] = await tx.select({ milestone: sql<number | null>`max(${coupons.milestone})` }).from(coupons);
       const progress = milestoneProgress({ paidOrders, n: config.COUPON_EVERY_N_ORDERS, lastMilestone: last?.milestone ?? 0 });
       if (!progress.eligible) {
         throw new AppError('NO_ELIGIBLE_MILESTONE', { paidOrders, nextMilestoneAt: progress.nextMilestoneAt });
