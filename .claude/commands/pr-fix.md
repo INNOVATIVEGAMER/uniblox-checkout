@@ -111,8 +111,7 @@ For EACH issue:
 4. **Walk it through both lanes** (skill → Step 3) — architect for boundaries, data model, contracts, security, scale; SDE2 for types, error handling, edge cases, redundancy, naming. One merged pass drifts to whichever lane you thought of first
 5. **Generalize before fixing** (skill → Step 3) — name the pattern, grep for its other sites, and record every one in the plan's `Sites` column. Then ask what let them diverge: if someone could add a new wrong site tomorrow with no check failing, you are fixing instances, not the defect. An axis an earlier round already flagged is the strongest signal that the earlier fix was an instance patch
 6. **Look it up** (skill → Step 4) — gated. A finding about how a dependency behaves is `library-behavior.md`; one about the shape of a mechanism the fix introduces is `dont-design-in-a-vacuum.md`. Validate before relying on it, and carry the result into your PR reply at the strength you have
-7. **Decide the disposition** (skill → Step 3) — this PR, or a new issue. What this change caused is fixed here; what was already broken is filed now with `gh issue create`, so the number exists for the Done table
-8. Decide what you'll actually do — agree with the reviewer, improve on their suggestion, or take a different tack
+7. Decide what you'll actually do — agree with the reviewer, improve on their suggestion, or take a different tack
 
 Do NOT blindly accept the reviewer's suggested fix. Research and reason from the code.
 
@@ -142,11 +141,8 @@ Follow Part 2 (Fixing) of the skill:
 | 1   | ❌ Blocking | {the class, in one phrase} | `a.ts:42`, `a.ts:88`, `b.ts:17` | {what was done — one line} |
 | 2   | ⚠️ Minor    | {the class, in one phrase} | `c.ts:78` (only site)           | {what was done — one line} |
 
-Filed out of scope: #{n} ({one phrase})
 Typecheck + lint: clean.
 ```
-
-Drop the `Filed out of scope` line when nothing was filed.
 
 `Sites` is every instance the grep found, not the one the reviewer named. A single-site finding says `(only site)`; a row that leaves the column implicit is a sweep that did not happen.
 
@@ -182,4 +178,4 @@ Fix issues in this order:
 - **Terse output, not terse thinking:** The Done table is the whole of what you print — no root-cause prose, no rationale, no "issues addressed" narrative. The analysis behind it is unbounded
 - **No patches:** Follow the plan; if a specific fix becomes ambiguous mid-flight, pause on that fix and ask
 - **One at a time:** Fixes are applied incrementally (blocking first, then minor), but without stopping between them
-- **Nothing is dropped, but not everything is this PR:** Every finding ends in a fix or an issue number. What this change caused is fixed here; what was already broken is filed. See `.claude/rules/no-follow-up-deferral.md`.
+- **No follow-up deferrals:** Every flagged issue is fixed in this PR. Reviewer framing like "not blocking", "follow-up PR", or "post-launch monitor" is not a license to skip. Skip only with the user's approval or when an existing issue already owns the work, and never create a new issue for a finding. See `.claude/rules/no-follow-up-deferral.md`.

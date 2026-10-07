@@ -25,7 +25,7 @@ Part 1 reads the code the way the two reviewers will — both lanes, the same ru
 
 ## What Reaches Chat
 
-One message, at the end: the Done table, any issues you filed, and the verification line. Nothing before it — no raw-comment dump, no plan table, no progress narration.
+One message, at the end: the Done table and the verification line. Nothing before it — no raw-comment dump, no plan table, no progress narration.
 
 Two exceptions, each about one fix rather than the whole run:
 
@@ -138,14 +138,8 @@ For EACH issue:
 
    **Recurrence is the strongest signal.** If an earlier round flagged this same axis at a different line, the earlier fix was an instance patch. Escalate now rather than patching again.
 
-6. **Decide the disposition** -- this PR, or an issue. What this change caused is fixed here; what was already broken is filed now, so the number exists for the Done table (`no-follow-up-deferral.md`):
-
-   ```bash
-   gh issue create --title "{one line}" --body "{what and where}"
-   ```
-
-7. **Decide what you'll actually do** -- this may agree with, improve on, or differ from the reviewer's suggestion
-8. **Nothing is dropped** -- every finding ends in a fix or a number. No "deferred" bucket, and no weight given to "not blocking" framing.
+6. **Decide what you'll actually do** -- this may agree with, improve on, or differ from the reviewer's suggestion
+7. **Nothing is dropped** -- every finding is fixed in this PR (`no-follow-up-deferral.md`). Skip one only with the user's approval or when an existing issue already owns it, and never create a new issue for it. No "deferred" bucket, and no weight given to "not blocking" framing.
 
 Do NOT blindly accept the reviewer's suggested fix. Research and reason from the code.
 
@@ -220,11 +214,8 @@ One row per class, blocking rows first. No "Changes Made", no code snippets, no 
 | 1   | ❌ Blocking | {the class, in one phrase} | `a.ts:42`, `a.ts:88`, `b.ts:17` | {what was done — one line} |
 | 2   | ⚠️ Minor    | {the class, in one phrase} | `c.ts:78` (only site)           | {what was done — one line} |
 
-Filed out of scope: #{n} ({one phrase}), #{n} ({one phrase})
 Typecheck + lint: clean.
 ```
-
-Drop the `Filed out of scope` line when nothing was filed.
 
 **`Sites` is what Step 3 produced.** Every instance the grep found, not the one the reviewer named — one row per class, however many sites it spans. A single-site finding says `(only site)`; a row that leaves the column implicit is a sweep that did not happen.
 
