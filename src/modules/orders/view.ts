@@ -1,4 +1,4 @@
-import { asc, eq } from 'drizzle-orm';
+import { type SQL, asc, eq } from 'drizzle-orm';
 import type { Db } from '../../db/client';
 import { coupons, orderItems, orders } from '../../db/schema';
 import { AppError, toErrorBody } from '../../errors';
@@ -34,12 +34,34 @@ function toCouponView(code: string | null, percentOff: number | null) {
   return { code, percentOff };
 }
 
+/** Order views matching `where`, oldest first. The lines query reuses `where` through the orders join. */
+export async function selectOrderViews(db: Db, where?: SQL) {
+  const rows = await db
+    .select(orderColumns)
+    .from(orders)
+    .leftJoin(coupons, eq(coupons.id, orders.couponId))
+    .where(where)
+    .orderBy(asc(orders.createdAt), asc(orders.id));
+  const lines = await db
+    .select({ orderId: orderItems.orderId, ...lineColumns })
+    .from(orderItems)
+    .innerJoin(orders, eq(orders.id, orderItems.orderId))
+    .where(where)
+    .orderBy(asc(orderItems.orderId), asc(orderItems.productId));
+
+  const linesByOrder = new Map<string, Omit<(typeof lines)[number], 'orderId'>[]>();
+  for (const { orderId, ...line } of lines) linesByOrder.set(orderId, [...(linesByOrder.get(orderId) ?? []), line]);
+  return rows.map(({ couponCode, percentOff, ...order }) => ({
+    ...order,
+    coupon: toCouponView(couponCode, percentOff),
+    lines: linesByOrder.get(order.id) ?? [],
+  }));
+}
+
 export async function loadOrderView(db: Db, orderId: string) {
-  const [row] = await db.select(orderColumns).from(orders).leftJoin(coupons, eq(coupons.id, orders.couponId)).where(eq(orders.id, orderId));
-  if (!row) throw new AppError('ORDER_NOT_FOUND');
-  const lines = await db.select(lineColumns).from(orderItems).where(eq(orderItems.orderId, orderId)).orderBy(asc(orderItems.productId));
-  const { couponCode, percentOff, ...order } = row;
-  return { ...order, coupon: toCouponView(couponCode, percentOff), lines };
+  const [view] = await selectOrderViews(db, eq(orders.id, orderId));
+  if (!view) throw new AppError('ORDER_NOT_FOUND');
+  return view;
 }
 
 export type OrderView = Awaited<ReturnType<typeof loadOrderView>>;
