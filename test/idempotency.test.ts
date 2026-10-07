@@ -5,6 +5,7 @@ import { carts, idempotencyKeys, products } from '../src/db/schema';
 import type { ErrorCode } from '../src/errors';
 import { FakeGateway } from '../src/modules/payments/fake-gateway';
 import { createTestApp, sendJson } from './helpers/app';
+import { barrier, holdLock } from './helpers/barrier';
 import { cartRequests } from './helpers/carts';
 import {
   type CheckoutBody,
@@ -213,5 +214,68 @@ describe('T22 a stock failure consumes nothing', () => {
     expect(errorBodySchema.parse(await replay.json()).error).toEqual(error);
 
     await expectOrder(await postCheckout(app, cartId, newKey(), visa(total)), 201);
+  });
+});
+
+describe('T4 one key, different requests', () => {
+  it.each([
+    ['another cart', async () => ({ cartId: await cartWith({ p_mouse: 1 }), body: visa(MOUSE_PAISE) })],
+    ['another total', async (cartId: string) => ({ cartId, body: visa(MOUSE_PAISE + 1) })],
+    ['another token', async (cartId: string) => ({ cartId, body: { expectedTotalPaise: MOUSE_PAISE, paymentToken: 'pm_card_chargeDeclined' } })],
+  ])('the same key with %s gets 422 IDEMPOTENCY_KEY_REUSED and leaves the key row unchanged', async (_label, other) => {
+    const cartId = await cartWith({ p_mouse: 1 });
+    const key = newKey();
+    await expectOrder(await postCheckout(app, cartId, key, visa(MOUSE_PAISE)), 201);
+    const before = await keyRow(db, key);
+
+    const second = await other(cartId);
+    await expectError(await postCheckout(app, second.cartId, key, second.body), 422, 'IDEMPOTENCY_KEY_REUSED');
+    expect(await keyRow(db, key)).toEqual(before);
+    expect(await orderCount(db)).toBe(1);
+  });
+
+  it('the same key on the uppercase form of the cart id replays instead of returning 422', async () => {
+    const cartId = await cartWith({ p_mouse: 1 });
+    const key = newKey();
+    const paid = await expectOrder(await postCheckout(app, cartId, key, visa(MOUSE_PAISE)), 201);
+
+    const replay = await postCheckout(app, cartId.toUpperCase(), key, visa(MOUSE_PAISE));
+    expect(await expectOrder(replay, 201, { replayed: true })).toEqual(paid);
+  });
+
+  it('two carts racing on one key behind a barrier on their shared product give one 201 and one 422, never a 500', async () => {
+    const cartIds = await Promise.all([cartWith({ p_lamp: 1 }), cartWith({ p_lamp: 1 })]);
+    const key = newKey();
+
+    const responses = await barrier({ table: 'products', id: 'p_lamp' }, 2, () =>
+      cartIds.map((cartId) => postCheckout(app, cartId, key, visa(LAMP_PAISE))),
+    );
+
+    expect(responses.map((res) => res.status).sort()).toEqual([201, 422]);
+    expect(await orderCount(db)).toBe(1);
+  });
+});
+
+describe('T17 a lock timeout during reserve', () => {
+  it('gets 503 LOCK_TIMEOUT, stores no key and writes nothing, and the same key then pays', async () => {
+    const short = createTestApp({ LOCK_TIMEOUT_MS: '200' });
+    const cartId = await cartWith({ p_lamp: 1 });
+    const key = newKey();
+    const lock = await holdLock({ table: 'products', id: 'p_lamp' });
+
+    await withCleanup(
+      async () => {
+        await expectError(await postCheckout(short.app, cartId, key, visa(LAMP_PAISE)), 503, 'LOCK_TIMEOUT');
+        expect(await keyRow(db, key)).toBeUndefined();
+        expect(await orderCount(db)).toBe(0);
+        expect(await stockOf(db, 'p_lamp')).toBe(3);
+        expect((await getCart(cartId)).status).toBe('open');
+        await lock.release();
+
+        await expectOrder(await postCheckout(short.app, cartId, key, visa(LAMP_PAISE)), 201);
+      },
+      lock.release,
+      () => short.pool.end(),
+    );
   });
 });

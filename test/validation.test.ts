@@ -40,6 +40,13 @@ const errorBodySchema = z.strictObject({
 const jsonBody = (body: string): RequestInit => ({ headers: JSON_HEADERS, body });
 const ONE = JSON.stringify({ quantity: 1 });
 
+const CHECKOUT_BODY = { expectedTotalPaise: 0, paymentToken: 'pm_card_visa' };
+const checkoutInit = (body: unknown, headers: Record<string, string> = { ...JSON_HEADERS, 'Idempotency-Key': 'k-1' }) => ({
+  headers,
+  body: typeof body === 'string' ? body : JSON.stringify(body),
+});
+const checkoutPath = `/carts/${CART_ID}/checkout`;
+
 // T25: every malformed or unknown request is rejected inside the envelope, with nothing changed.
 const rows: Row[] = [
   ...['P_LAMP', 'lamp', 'p_', `p_${'a'.repeat(61)}`].map((id): Row => ({
@@ -135,6 +142,7 @@ const rows: Row[] = [
     { label: `malformed cart id (${why}) on GET`, method: 'GET', path: `/carts/${id}` },
     { label: `malformed cart id (${why}) on PUT`, method: 'PUT', path: `/carts/${id}/items/p_lamp`, init: jsonBody(ONE) },
     { label: `malformed cart id (${why}) on DELETE`, method: 'DELETE', path: `/carts/${id}/items/p_lamp` },
+    { label: `malformed cart id (${why}) on checkout`, method: 'POST', path: `/carts/${id}/checkout`, init: checkoutInit(CHECKOUT_BODY) },
   ].map((row): Row => ({ ...row, status: 400, code: 'VALIDATION_ERROR', detailPath: 'param.id' }))),
   ...[
     { label: 'unknown cart on GET', method: 'GET', path: `/carts/${UNKNOWN_CART_ID}` },
@@ -153,6 +161,49 @@ const rows: Row[] = [
     { label: 'malformed product id on PUT', method: 'PUT', path: `/carts/${CART_ID}/items/LAMP`, init: jsonBody(ONE) },
     { label: 'malformed product id on DELETE', method: 'DELETE', path: `/carts/${CART_ID}/items/LAMP` },
   ].map((row): Row => ({ ...row, status: 400, code: 'VALIDATION_ERROR', detailPath: 'param.productId' })),
+  ...(
+    [
+      ['missing Idempotency-Key', JSON_HEADERS],
+      ['empty Idempotency-Key', { ...JSON_HEADERS, 'Idempotency-Key': '' }],
+      ['Idempotency-Key over 255 characters', { ...JSON_HEADERS, 'Idempotency-Key': 'k'.repeat(256) }],
+    ] satisfies [string, Record<string, string>][]
+  ).map(([label, headers]): Row => ({
+    label,
+    method: 'POST',
+    path: checkoutPath,
+    init: checkoutInit(CHECKOUT_BODY, headers),
+    status: 400,
+    code: 'IDEMPOTENCY_KEY_INVALID',
+  })),
+  ...(
+    [
+      ['missing expectedTotalPaise', { paymentToken: 'pm_card_visa' }, 'json.expectedTotalPaise'],
+      ['negative expectedTotalPaise', { ...CHECKOUT_BODY, expectedTotalPaise: -1 }, 'json.expectedTotalPaise'],
+      ['fractional expectedTotalPaise', { ...CHECKOUT_BODY, expectedTotalPaise: 1.5 }, 'json.expectedTotalPaise'],
+      ['expectedTotalPaise as a string', { ...CHECKOUT_BODY, expectedTotalPaise: '100' }, 'json.expectedTotalPaise'],
+      ['missing paymentToken', { expectedTotalPaise: 0 }, 'json.paymentToken'],
+      ['unknown field beside the checkout body', { ...CHECKOUT_BODY, note: 'gift' }, undefined],
+    ] satisfies [string, unknown, string | undefined][]
+  ).map(([label, body, detailPath]): Row => ({
+    label,
+    method: 'POST',
+    path: checkoutPath,
+    init: checkoutInit(body),
+    status: 400,
+    code: 'VALIDATION_ERROR',
+    detailPath,
+  })),
+  {
+    label: 'non-JSON Content-Type on checkout',
+    method: 'POST',
+    path: checkoutPath,
+    init: checkoutInit(CHECKOUT_BODY, { 'content-type': 'text/plain', 'Idempotency-Key': 'k-1' }),
+    status: 400,
+    code: 'VALIDATION_ERROR',
+    detailPath: 'header.content-type',
+  },
+  { label: 'malformed order id', method: 'GET', path: '/orders/not-a-uuid', status: 400, code: 'VALIDATION_ERROR', detailPath: 'param.id' },
+  { label: 'unknown order', method: 'GET', path: `/orders/${UNKNOWN_CART_ID}`, status: 404, code: 'ORDER_NOT_FOUND' },
   { label: 'unknown route', method: 'GET', path: '/nope', status: 404, code: 'NOT_FOUND' },
   { label: 'wrong method on a known path', method: 'DELETE', path: '/products', status: 404, code: 'NOT_FOUND' },
 ];
@@ -168,5 +219,13 @@ describe('T25 validation and not-found', () => {
     expect(error.code).toBe(code);
     if (detailPath) expect(error.details).toContainEqual(expect.objectContaining({ path: detailPath }));
     expect(await snapshotDb(db)).toEqual(before);
+  });
+});
+
+describe('the Idempotency-Key length bound', () => {
+  it('accepts a 255-character key: the empty cart then gets 422 CART_EMPTY', async () => {
+    const res = await app.request(checkoutPath, { method: 'POST', ...checkoutInit(CHECKOUT_BODY, { ...JSON_HEADERS, 'Idempotency-Key': 'k'.repeat(255) }) });
+    expect(res.status).toBe(422);
+    expect(errorBodySchema.parse(await res.json()).error.code).toBe('CART_EMPTY');
   });
 });

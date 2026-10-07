@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { FakeGateway } from '../src/modules/payments/fake-gateway';
 import { createTestApp, sendJson } from './helpers/app';
+import { type HeldLock, holdLock } from './helpers/barrier';
 import { cartRequests } from './helpers/carts';
 import {
   expectOrder,
@@ -137,5 +138,77 @@ describe('T23 order snapshots', () => {
 
     const after = await app.request(`/orders/${placed.id}`);
     expect(await after.json()).toEqual(placed);
+  });
+});
+
+describe('T18 PATCH stock during a reservation', () => {
+  it('a decline adds the reserved unit back on top of the new stock', async () => {
+    const gate = gated(new FakeGateway(), { at: 'before' });
+    const cartId = await cartWith({ p_lamp: 1 });
+    const pending = postCheckout(appWith(gate.gateway), cartId, newKey(), declined(LAMP_PAISE));
+
+    await withCleanup(
+      async () => {
+        await gate.entered();
+        expect((await sendJson(app, 'PATCH', '/admin/products/p_lamp', { stock: 10 })).status).toBe(200);
+        gate.release();
+        await expectError(await pending, 402, 'PAYMENT_FAILED');
+        expect(await stockOf(db, 'p_lamp')).toBe(11);
+      },
+      async () => gate.release(),
+      () => Promise.allSettled([pending]),
+    );
+  });
+});
+
+describe('a charge slower than GATEWAY_TIMEOUT_MS', () => {
+  it('is aborted, and the checkout returns 202 with the order pending', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fast = createTestApp({ GATEWAY_TIMEOUT_MS: '100' });
+    const gate = gated(new FakeGateway(), { at: 'before' });
+    const cartId = await cartWith({ p_lamp: 1 });
+
+    await withCleanup(
+      async () => {
+        const order = await expectOrder(await postCheckout(fast.appWith(gate.gateway), cartId, newKey(), visa(LAMP_PAISE)), 202);
+        expect(order.status).toBe('pending_payment');
+        expect(gate.calls).toBe(1);
+        expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ err: expect.objectContaining({ name: 'TimeoutError' }) }));
+        expect(await stockOf(db, 'p_lamp')).toBe(2);
+      },
+      async () => gate.release(),
+      () => fast.pool.end(),
+    );
+  });
+});
+
+describe('finalize failing after the charge', () => {
+  it('returns 503, leaves the order pending with its reservation, and the same key replays 202', async () => {
+    const short = createTestApp({ LOCK_TIMEOUT_MS: '200' });
+    const gate = gated(new FakeGateway(), { at: 'after' });
+    const shortApp = short.appWith(gate.gateway);
+    const cartId = await cartWith({ p_lamp: 1 });
+    const key = newKey();
+    const pending = postCheckout(shortApp, cartId, key, visa(LAMP_PAISE));
+    let lock: HeldLock | undefined;
+
+    await withCleanup(
+      async () => {
+        await gate.entered();
+        lock = await holdLock({ table: 'carts', id: cartId });
+        gate.release();
+        await expectError(await pending, 503, 'LOCK_TIMEOUT');
+        await lock.release();
+
+        const order = await expectOrder(await postCheckout(shortApp, cartId, key, visa(LAMP_PAISE)), 202, { replayed: true });
+        expect(order.status).toBe('pending_payment');
+        expect(await stockOf(db, 'p_lamp')).toBe(2);
+        expect(gate.calls).toBe(1);
+      },
+      async () => gate.release(),
+      async () => lock?.release(),
+      () => Promise.allSettled([pending]),
+    );
+    await short.pool.end();
   });
 });

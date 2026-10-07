@@ -4,14 +4,17 @@ import { z } from 'zod';
 import { cartItems, orderItems, orders } from '../src/db/schema';
 import { MAX_CART_LINES } from '../src/domain/money';
 import { createTestApp } from './helpers/app';
-import { barrier, holdLock } from './helpers/barrier';
+import { barrier, holdLock, lineUp } from './helpers/barrier';
 import { bulkId, cartRequests, cartViewSchema, fillCart } from './helpers/carts';
-import { newKey, postCheckout, stockOf, visa } from './helpers/checkout';
+import { FakeGateway } from '../src/modules/payments/fake-gateway';
+import { expectOrder, idleInTransaction, newKey, orderCount, postCheckout, stockOf, visa } from './helpers/checkout';
 import { withCleanup } from './helpers/cleanup';
 import { resetDb } from './helpers/db';
-import { errorBodySchema } from './helpers/errors';
+import { errorBodySchema, expectError } from './helpers/errors';
+import { gated } from './helpers/gate';
+import { firstSettled, within } from './helpers/within';
 
-const { app, db, pool } = createTestApp();
+const { app, appWith, db, pool } = createTestApp();
 const { newCart, putItem, cartWith } = cartRequests(app);
 
 beforeEach(() => resetDb(db));
@@ -92,6 +95,108 @@ describe.each([
     }
     expect(await stockOf(db, 'p_lamp')).toBe(stockLeft);
     expect(await paidLampQuantity()).toBe(paid * perCart);
+  });
+});
+
+async function liveOrderOf(cartId: string): Promise<string | undefined> {
+  const [order] = await db.select({ id: orders.id }).from(orders).where(eq(orders.cartId, cartId));
+  return order?.id;
+}
+
+describe('T3 one key sent 10 times behind a cart barrier, gated before the charge', () => {
+  it('the 9 losers replay 202, the first returns 201 after release, and there is 1 order and 1 charge', async () => {
+    const gate = gated(new FakeGateway(), { at: 'before' });
+    const gatedApp = appWith(gate.gateway);
+    const cartId = await cartWith({ p_lamp: 1 });
+    const key = newKey();
+    const send = () => postCheckout(gatedApp, cartId, key, visa(LAMP_PAISE));
+    let requests: Promise<Response>[] = [];
+
+    await withCleanup(
+      async () => {
+        requests = await lineUp({ table: 'carts', id: cartId }, 10, () => Array.from({ length: 10 }, send), async () =>
+          gate.release(),
+        );
+        await gate.entered();
+        const losers = await within(firstSettled(requests, 9), 'the 9 losers did not settle');
+        const orderId = await liveOrderOf(cartId);
+        for (const loser of losers) {
+          expect((await expectOrder(loser, 202, { replayed: true })).id).toBe(orderId);
+        }
+        expect(await idleInTransaction(db)).toBe(0);
+
+        gate.release();
+        const winner = (await Promise.all(requests)).find((res) => !losers.includes(res));
+        if (!winner) throw new Error('no winner');
+        const paid = await expectOrder(winner, 201);
+        expect(paid).toMatchObject({ id: orderId, status: 'paid' });
+
+        expect(await expectOrder(await send(), 201, { replayed: true })).toEqual(paid);
+        expect(await orderCount(db)).toBe(1);
+        expect(gate.calls).toBe(1);
+        expect(await stockOf(db, 'p_lamp')).toBe(2);
+      },
+      async () => gate.release(),
+      () => Promise.allSettled(requests),
+    );
+  });
+});
+
+describe('T5 five keys on one cart behind a cart barrier, gated', () => {
+  it('gives 4 × 409 CART_PAYMENT_PENDING with the order id, then one 201, and a losing key retried gets CART_CHECKED_OUT', async () => {
+    const gate = gated(new FakeGateway(), { at: 'before' });
+    const gatedApp = appWith(gate.gateway);
+    const cartId = await cartWith({ p_lamp: 1 });
+    const send = (key: string) => postCheckout(gatedApp, cartId, key, visa(LAMP_PAISE));
+    let requests: Promise<{ key: string; res: Response }>[] = [];
+
+    await withCleanup(
+      async () => {
+        requests = await lineUp(
+          { table: 'carts', id: cartId },
+          5,
+          () => Array.from({ length: 5 }, async () => {
+            const key = newKey();
+            return { key, res: await send(key) };
+          }),
+          async () => gate.release(),
+        );
+        await gate.entered();
+        const losers = await within(firstSettled(requests, 4), 'the 4 losers did not settle');
+        const orderId = await liveOrderOf(cartId);
+        for (const { res } of losers) {
+          expect((await expectError(res, 409, 'CART_PAYMENT_PENDING')).details).toEqual({ orderId });
+        }
+
+        gate.release();
+        const winner = (await Promise.all(requests)).find((request) => !losers.includes(request));
+        if (!winner) throw new Error('no winner');
+        expect((await expectOrder(winner.res, 201)).id).toBe(orderId);
+
+        const [loser] = losers;
+        if (!loser) throw new Error('no loser');
+        const retried = await send(loser.key);
+        expect((await expectError(retried, 409, 'CART_CHECKED_OUT')).details).toEqual({ orderId });
+        expect(await orderCount(db)).toBe(1);
+        expect(await stockOf(db, 'p_lamp')).toBe(2);
+      },
+      async () => gate.release(),
+      () => Promise.allSettled(requests),
+    );
+  });
+});
+
+describe('T7 opposite-order carts', () => {
+  it('10 pairs of [keyboard, mouse] and [mouse, keyboard] all pay, with no 500s and no deadlock', async () => {
+    const carts = await Promise.all(
+      Array.from({ length: 10 }, () => [cartWith({ p_keyboard: 1, p_mouse: 1 }), cartWith({ p_mouse: 1, p_keyboard: 1 })]).flat(),
+    );
+
+    const responses = await Promise.all(carts.map((cartId) => postCheckout(app, cartId, newKey(), visa(499_900 + 129_950))));
+
+    expect(statusCounts(responses)).toEqual({ 201: 20 });
+    expect(await stockOf(db, 'p_keyboard')).toBe(30);
+    expect(await stockOf(db, 'p_mouse')).toBe(80);
   });
 });
 

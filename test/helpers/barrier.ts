@@ -93,19 +93,32 @@ async function untilLockWaiters(waiters: number, lockPid: number, requests: Prom
 }
 
 /**
- * Holds the target lock, fires the requests, waits until `waiters` of them are blocked on a lock,
- * then releases so they all contend at once. Every path releases the lock and settles the requests.
+ * Holds the target lock, fires the requests, waits until `waiters` of them are blocked on a lock, then
+ * releases so they all contend at once. Returns the requests unsettled, for tests where one of them then
+ * waits on a gate. On failure it releases the lock, runs `cleanups` (a gate's release), and settles the
+ * requests before rethrowing.
  */
-export async function barrier<T>(target: LockTarget, waiters: number, fire: () => Promise<T>[]): Promise<T[]> {
+export async function lineUp<T>(
+  target: LockTarget,
+  waiters: number,
+  fire: () => Promise<T>[],
+  ...cleanups: (() => Promise<unknown>)[]
+): Promise<Promise<T>[]> {
   const lock = await holdLock(target);
   let requests: Promise<T>[] = [];
-  await withCleanup(
-    async () => {
+  try {
+    await withCleanup(async () => {
       requests = fire();
       await untilLockWaiters(waiters, lock.pid, requests);
-    },
-    lock.release,
-    () => Promise.allSettled(requests),
-  );
-  return Promise.all(requests);
+    }, lock.release);
+  } catch (err) {
+    await Promise.allSettled([...cleanups.map((cleanup) => cleanup()), Promise.allSettled(requests)]);
+    throw err;
+  }
+  return requests;
+}
+
+/** lineUp, then waits for every request. Every path releases the lock and settles the requests. */
+export async function barrier<T>(target: LockTarget, waiters: number, fire: () => Promise<T>[]): Promise<T[]> {
+  return Promise.all(await lineUp(target, waiters, fire));
 }
