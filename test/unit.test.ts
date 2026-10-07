@@ -4,7 +4,9 @@ import { HTTPException } from 'hono/http-exception';
 import { describe, expect, it, vi } from 'vitest';
 import { loadConfig } from '../src/config';
 import { onError } from '../src/errors';
+import { milestoneProgress } from '../src/domain/milestones';
 import { MAX_CART_LINES, MAX_LINE_QUANTITY, MAX_UNIT_PRICE_PAISE, discount, lineTotal, total } from '../src/domain/money';
+import { couponCodeSchema, generateCouponCode } from '../src/modules/coupons/code';
 import { FakeGateway } from '../src/modules/payments/fake-gateway';
 import { withCleanup } from './helpers/cleanup';
 import { assertTestDatabaseUrl } from './helpers/test-db-url';
@@ -37,6 +39,37 @@ describe('T27 money', () => {
     expect(subtotal * 100).toBeLessThanOrEqual(Number.MAX_SAFE_INTEGER);
     const exact = (BigInt(subtotal) * 33n) / 100n;
     expect(BigInt(discount(subtotal, 33))).toBe(exact);
+  });
+});
+
+describe('T28 milestones', () => {
+  it.each([
+    ['n − 1 paid orders', { paidOrders: 4, lastMilestone: 0 }, { next: 1, eligible: false, remainingEligible: 0, nextMilestoneAt: 5 }],
+    ['n paid orders', { paidOrders: 5, lastMilestone: 0 }, { next: 1, eligible: true, remainingEligible: 0, nextMilestoneAt: 5 }],
+    ['2n paid orders, none rewarded: the oldest first', { paidOrders: 10, lastMilestone: 0 }, { next: 1, eligible: true, remainingEligible: 1, nextMilestoneAt: 5 }],
+    ['2n paid orders, the first rewarded', { paidOrders: 10, lastMilestone: 1 }, { next: 2, eligible: true, remainingEligible: 0, nextMilestoneAt: 10 }],
+    ['2n paid orders, both rewarded', { paidOrders: 11, lastMilestone: 2 }, { next: 3, eligible: false, remainingEligible: 0, nextMilestoneAt: 15 }],
+  ])('%s', (_label, input, expected) => {
+    expect(milestoneProgress({ n: 5, ...input })).toEqual(expected);
+  });
+});
+
+describe('coupon codes', () => {
+  it('generates SAVE{x}-M{k}- and 8 Crockford base32 characters', () => {
+    for (let i = 0; i < 200; i++) expect(generateCouponCode(10, 3)).toMatch(/^SAVE10-M3-[0-9A-HJKMNP-TV-Z]{8}$/);
+  });
+
+  it('survives the shared schema unchanged', () => {
+    const code = generateCouponCode(100, 12);
+    expect(couponCodeSchema.parse(code)).toBe(code);
+  });
+
+  it('normalises input by trimming and uppercasing', () => {
+    expect(couponCodeSchema.parse('  save10-m1-abc  ')).toBe('SAVE10-M1-ABC');
+  });
+
+  it.each(['', '   ', 'A'.repeat(65)])('rejects %j', (input) => {
+    expect(couponCodeSchema.safeParse(input).success).toBe(false);
   });
 });
 
