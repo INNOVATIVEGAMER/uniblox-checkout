@@ -64,7 +64,12 @@ Every error uses one envelope:
 | ------ | ------------------ | --------------------------------------------------------------------------------------------------- |
 | 400    | `VALIDATION_ERROR` | A malformed path parameter or body field, malformed JSON, a non-JSON Content-Type, or an empty PATCH |
 | 404    | `PRODUCT_NOT_FOUND` | The product ID in the path does not exist                                                           |
+| 404    | `CART_NOT_FOUND`   | The cart ID in the path does not exist                                                              |
 | 404    | `NOT_FOUND`        | No route matches the method and path                                                                |
+| 409    | `CART_CHECKED_OUT` | The cart is checked out, so it can no longer change                                                 |
+| 409    | `CART_PAYMENT_PENDING` | A payment for the cart is in progress. Retry once it resolves                                   |
+| 409    | `INSUFFICIENT_STOCK` | The requested quantity is above the stock available. `details` lists `{ productId, requested, available }` |
+| 422    | `CART_LINE_LIMIT`  | Adding a new line to a cart that already has 50 lines. `details` is `{ maxLines }`                  |
 | 500    | `INTERNAL`         | An unexpected failure. It is logged, and no internals are returned                                  |
 | 503    | `LOCK_TIMEOUT`     | A row lock was not granted within `LOCK_TIMEOUT_MS`. Safe to retry                                  |
 
@@ -110,3 +115,93 @@ Content-Type: application/json
 | 400    | `VALIDATION_ERROR`  | A malformed `:id`, an empty or invalid body, an unknown field, or a non-JSON Content-Type |
 | 404    | `PRODUCT_NOT_FOUND` | No product has this ID                                                              |
 | 503    | `LOCK_TIMEOUT`      | The product row is locked by another transaction for longer than `LOCK_TIMEOUT_MS`  |
+
+### Carts
+
+A cart's ID is a UUID. Its lines are priced live: each view reads the current product prices and stock. Cart mutations are safe to retry, so none of them needs an idempotency key.
+
+The cart view, returned by every cart route:
+
+```json
+{
+  "id": "5f0c6a0e-3b1d-4c2a-9e7f-1a2b3c4d5e6f",
+  "status": "open",
+  "lines": [
+    {
+      "productId": "p_cable",
+      "name": "USB-C Cable",
+      "unitPricePaise": 34999,
+      "quantity": 3,
+      "lineTotalPaise": 104997,
+      "available": true
+    }
+  ],
+  "subtotalPaise": 104997,
+  "discountPaise": 0,
+  "totalPaise": 104997
+}
+```
+
+- **`status`:** `open`, `pending_payment` or `checked_out`. Only an `open` cart can change.
+- **`lines`:** ordered by product ID. `available` is `stock >= quantity` right now, so it can turn false after an admin lowers the stock.
+- **`totalPaise`:** `subtotalPaise − discountPaise`. The discount stays 0 until coupons arrive.
+
+### `POST /carts`
+
+Creates an empty cart. No body.
+
+**201**: the cart view, with no lines.
+
+### `GET /carts/:id`
+
+**200**: the cart view, in any status.
+
+| Status | Code               | When                        |
+| ------ | ------------------ | --------------------------- |
+| 400    | `VALIDATION_ERROR` | `:id` is not a UUID         |
+| 404    | `CART_NOT_FOUND`   | No cart has this ID         |
+
+### `PUT /carts/:id/items/:productId`
+
+Sets the line's quantity. This covers both "add to cart" and "change the quantity": sending the same request twice leaves the same cart.
+
+- **`:productId`:** matches `^p_[a-z0-9_]{1,60}$`.
+- **`quantity`:** an integer from 1 to 1000. To remove a line, use `DELETE`.
+
+```http
+PUT /carts/5f0c6a0e-3b1d-4c2a-9e7f-1a2b3c4d5e6f/items/p_cable
+Content-Type: application/json
+
+{ "quantity": 3 }
+```
+
+**201** when the line was added, **200** when an existing line was changed. Both return the cart view.
+
+The stock check here is soft: it compares against the stock at this moment and reserves nothing. Checkout makes the authoritative check.
+
+When a request breaks more than one rule, the first failing check in this order decides the error: the request shape (400), the cart (404, then 409 for a locked status), the product (404), the stock (409), then the line cap (422).
+
+| Status | Code                   | When                                                                         |
+| ------ | ---------------------- | ---------------------------------------------------------------------------- |
+| 400    | `VALIDATION_ERROR`     | A malformed `:id` or `:productId`, a quantity outside 1–1000 or not an integer, an unknown field, or a non-JSON Content-Type |
+| 404    | `CART_NOT_FOUND`       | No cart has this ID                                                          |
+| 404    | `PRODUCT_NOT_FOUND`    | No product has this ID                                                       |
+| 409    | `CART_PAYMENT_PENDING` | The cart's payment is in progress                                            |
+| 409    | `CART_CHECKED_OUT`     | The cart is checked out                                                      |
+| 409    | `INSUFFICIENT_STOCK`   | `quantity` is above the product's stock                                      |
+| 422    | `CART_LINE_LIMIT`      | The line is new and the cart already has 50 lines. Changing an existing line is always allowed |
+| 503    | `LOCK_TIMEOUT`         | The cart is locked by another request for longer than `LOCK_TIMEOUT_MS`     |
+
+### `DELETE /carts/:id/items/:productId`
+
+Removes the line. Removing a line that isn't in the cart also succeeds, so a retried DELETE gets the same answer.
+
+**200**: the cart view.
+
+| Status | Code                   | When                                                                     |
+| ------ | ---------------------- | ------------------------------------------------------------------------ |
+| 400    | `VALIDATION_ERROR`     | A malformed `:id` or `:productId`                                        |
+| 404    | `CART_NOT_FOUND`       | No cart has this ID                                                      |
+| 409    | `CART_PAYMENT_PENDING` | The cart's payment is in progress                                        |
+| 409    | `CART_CHECKED_OUT`     | The cart is checked out                                                  |
+| 503    | `LOCK_TIMEOUT`         | The cart is locked by another request for longer than `LOCK_TIMEOUT_MS`  |

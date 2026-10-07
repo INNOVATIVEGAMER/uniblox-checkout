@@ -1,0 +1,227 @@
+import { eq } from 'drizzle-orm';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { z } from 'zod';
+import { cartItems, carts, products } from '../src/db/schema';
+import { MAX_CART_LINES } from '../src/domain/money';
+import type { ErrorCode } from '../src/errors';
+import { createTestApp, sendJson } from './helpers/app';
+import { bulkId, cartRequests, cartViewSchema, fillCart } from './helpers/carts';
+import { resetDb, snapshotDb } from './helpers/db';
+
+const { app, db, pool } = createTestApp();
+
+beforeEach(() => resetDb(db));
+afterAll(() => pool.end());
+
+const errorBodySchema = z.strictObject({
+  error: z.strictObject({ code: z.string(), message: z.string(), details: z.unknown().optional() }),
+});
+
+const { newCart, putItem, deleteItem } = cartRequests(app);
+
+async function expectView(res: Response, status: number) {
+  expect(res.status).toBe(status);
+  return cartViewSchema.parse(await res.json());
+}
+
+async function expectError(res: Response, status: number, code: ErrorCode) {
+  expect(res.status).toBe(status);
+  const { error } = errorBodySchema.parse(await res.json());
+  expect(error.code).toBe(code);
+  return error;
+}
+
+async function getCart(cartId: string) {
+  return expectView(await app.request(`/carts/${cartId}`), 200);
+}
+
+const keyboard = { productId: 'p_keyboard', name: 'Mechanical Keyboard', unitPricePaise: 499_900 };
+
+describe('cart lifecycle', () => {
+  it('POST creates an empty open cart, and GET returns it', async () => {
+    const res = await app.request('/carts', { method: 'POST' });
+    const created = await expectView(res, 201);
+    expect(created).toEqual({
+      id: expect.any(String),
+      status: 'open',
+      lines: [],
+      subtotalPaise: 0,
+      discountPaise: 0,
+      totalPaise: 0,
+    });
+    expect(await getCart(created.id)).toEqual(created);
+  });
+
+  it('PUT sets the quantity: 201 when it adds the line, 200 when it changes it, and a repeat never adds', async () => {
+    const cartId = await newCart();
+    const line = (quantity: number) => ({
+      ...keyboard,
+      quantity,
+      lineTotalPaise: 499_900 * quantity,
+      available: true,
+    });
+
+    expect((await expectView(await putItem(cartId, 'p_keyboard', 2), 201)).lines).toEqual([line(2)]);
+    expect((await expectView(await putItem(cartId, 'p_keyboard', 2), 200)).lines).toEqual([line(2)]);
+    expect((await expectView(await putItem(cartId, 'p_keyboard', 1), 200)).lines).toEqual([line(1)]);
+
+    const rows = await db.select().from(cartItems);
+    expect(rows).toEqual([{ cartId, productId: 'p_keyboard', quantity: 1 }]);
+  });
+
+  it('DELETE removes the line, and deleting an absent or unknown line still returns 200 with the cart', async () => {
+    const cartId = await newCart();
+    await putItem(cartId, 'p_mouse', 1);
+    await putItem(cartId, 'p_cable', 2);
+
+    const afterDelete = await expectView(await deleteItem(cartId, 'p_mouse'), 200);
+    expect(afterDelete.lines.map((l) => l.productId)).toEqual(['p_cable']);
+
+    expect(await expectView(await deleteItem(cartId, 'p_mouse'), 200)).toEqual(afterDelete);
+    expect(await expectView(await deleteItem(cartId, 'p_nope'), 200)).toEqual(afterDelete);
+    expect(await getCart(cartId)).toEqual(afterDelete);
+  });
+});
+
+describe('T24 cart view', () => {
+  it('prices lines live with odd-paise totals, in product id order', async () => {
+    const cartId = await newCart();
+    await putItem(cartId, 'p_mouse', 1);
+    await putItem(cartId, 'p_cable', 3);
+
+    expect(await getCart(cartId)).toEqual({
+      id: cartId,
+      status: 'open',
+      lines: [
+        {
+          productId: 'p_cable',
+          name: 'USB-C Cable',
+          unitPricePaise: 34_999,
+          quantity: 3,
+          lineTotalPaise: 104_997,
+          available: true,
+        },
+        {
+          productId: 'p_mouse',
+          name: 'Wireless Mouse',
+          unitPricePaise: 129_950,
+          quantity: 1,
+          lineTotalPaise: 129_950,
+          available: true,
+        },
+      ],
+      subtotalPaise: 234_947,
+      discountPaise: 0,
+      totalPaise: 234_947,
+    });
+  });
+
+  it('shows available:false and the new price after an admin PATCH', async () => {
+    const cartId = await newCart();
+    await putItem(cartId, 'p_lamp', 2);
+    await putItem(cartId, 'p_mouse', 1);
+
+    expect((await sendJson(app, 'PATCH', '/admin/products/p_lamp', { stock: 0, pricePaise: 1 })).status).toBe(200);
+
+    const view = await getCart(cartId);
+    expect(view.lines.map((l) => [l.productId, l.available, l.lineTotalPaise])).toEqual([
+      ['p_lamp', false, 2],
+      ['p_mouse', true, 129_950],
+    ]);
+    expect(view.subtotalPaise).toBe(129_952);
+  });
+});
+
+describe('T24 soft stock check', () => {
+  it('accepts a quantity equal to the stock', async () => {
+    const cartId = await newCart();
+    const view = await expectView(await putItem(cartId, 'p_lamp', 3), 201);
+    expect(view.lines).toEqual([expect.objectContaining({ productId: 'p_lamp', quantity: 3, available: true })]);
+  });
+
+  it('accepts the 1000 quantity cap when the stock allows it', async () => {
+    await db.update(products).set({ stock: 1000 }).where(eq(products.id, 'p_cable'));
+    const cartId = await newCart();
+    await expectView(await putItem(cartId, 'p_cable', 1000), 201);
+  });
+
+  it('rejects a new line above the stock with 409 and adds nothing', async () => {
+    const cartId = await newCart();
+    const before = await snapshotDb(db);
+
+    const error = await expectError(await putItem(cartId, 'p_lamp', 4), 409, 'INSUFFICIENT_STOCK');
+    expect(error.details).toEqual([{ productId: 'p_lamp', requested: 4, available: 3 }]);
+    expect(await snapshotDb(db)).toEqual(before);
+  });
+
+  it('rejects raising an existing line above the stock with 409 and keeps its quantity', async () => {
+    const cartId = await newCart();
+    await putItem(cartId, 'p_lamp', 2);
+    const before = await snapshotDb(db);
+
+    await expectError(await putItem(cartId, 'p_lamp', 4), 409, 'INSUFFICIENT_STOCK');
+    expect(await snapshotDb(db)).toEqual(before);
+  });
+});
+
+describe('T24 line cap', () => {
+  async function cartWithBulkLines(lineCount: number): Promise<string> {
+    const cartId = await newCart();
+    await fillCart(db, cartId, lineCount);
+    return cartId;
+  }
+
+  it(`allows the ${MAX_CART_LINES}th line, rejects the next new line with 422, and still allows changes`, async () => {
+    const cartId = await cartWithBulkLines(MAX_CART_LINES - 1);
+
+    const full = await expectView(await putItem(cartId, bulkId(MAX_CART_LINES), 1), 201);
+    expect(full.lines).toHaveLength(MAX_CART_LINES);
+
+    const before = await snapshotDb(db);
+    const error = await expectError(await putItem(cartId, bulkId(MAX_CART_LINES + 1), 1), 422, 'CART_LINE_LIMIT');
+    expect(error.details).toEqual({ maxLines: MAX_CART_LINES });
+    expect(await snapshotDb(db)).toEqual(before);
+
+    const changed = await expectView(await putItem(cartId, bulkId(1), 5), 200);
+    expect(changed.lines).toHaveLength(MAX_CART_LINES);
+    expect(changed.lines[0]).toMatchObject({ productId: bulkId(1), quantity: 5 });
+  });
+
+  it.each([
+    ['a product above its stock', 'p_lamp', 4, 409, 'INSUFFICIENT_STOCK'],
+    ['an unknown product', 'p_nope', 1, 404, 'PRODUCT_NOT_FOUND'],
+  ] as const)('on a full cart, a new line with %s gets %i %s, not the line cap', async (_label, productId, quantity, status, code) => {
+    const cartId = await cartWithBulkLines(MAX_CART_LINES);
+    await expectError(await putItem(cartId, productId, quantity), status, code);
+  });
+});
+
+describe.each([
+  ['pending_payment', 'CART_PAYMENT_PENDING'],
+  ['checked_out', 'CART_CHECKED_OUT'],
+] as const)('T24 a %s cart (status set in SQL)', (status, code) => {
+  let cartId: string;
+
+  beforeEach(async () => {
+    cartId = await newCart();
+    await putItem(cartId, 'p_lamp', 1);
+    await db.update(carts).set({ status }).where(eq(carts.id, cartId));
+  });
+
+  it.each([
+    ['PUT changing a line', () => putItem(cartId, 'p_lamp', 2)],
+    ['PUT adding a line', () => putItem(cartId, 'p_mouse', 1)],
+    ['DELETE of a line', () => deleteItem(cartId, 'p_lamp')],
+    ['DELETE of an absent line', () => deleteItem(cartId, 'p_mouse')],
+  ])(`rejects %s with 409 ${code} and changes nothing`, async (_label, send) => {
+    const before = await snapshotDb(db);
+    await expectError(await send(), 409, code);
+    expect(await snapshotDb(db)).toEqual(before);
+  });
+
+  it('is still readable, with its status and lines', async () => {
+    const view = await getCart(cartId);
+    expect(view.status).toBe(status);
+    expect(view.lines.map((l) => [l.productId, l.quantity])).toEqual([['p_lamp', 1]]);
+  });
+});

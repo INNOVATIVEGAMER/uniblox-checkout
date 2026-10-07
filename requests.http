@@ -47,3 +47,46 @@ Content-Type: application/json
 
 ### 404 NOT_FOUND: an unknown route
 GET {{base}}/nope
+
+### Cart walkthrough: create a cart
+# @name createCart
+POST {{base}}/carts
+
+### Add 3 cables (201)
+PUT {{base}}/carts/{{createCart.response.body.id}}/items/p_cable
+Content-Type: application/json
+
+{ "quantity": 3 }
+
+### Send the same PUT again: still 3 cables (200)
+PUT {{base}}/carts/{{createCart.response.body.id}}/items/p_cable
+Content-Type: application/json
+
+{ "quantity": 3 }
+
+### Add a mouse
+PUT {{base}}/carts/{{createCart.response.body.id}}/items/p_mouse
+Content-Type: application/json
+
+{ "quantity": 1 }
+
+### View the cart: subtotal 234947
+GET {{base}}/carts/{{createCart.response.body.id}}
+
+### Remove the mouse (200). Sending it again also returns 200
+DELETE {{base}}/carts/{{createCart.response.body.id}}/items/p_mouse
+
+### 409 INSUFFICIENT_STOCK: 4 lamps when 3 are in stock
+PUT {{base}}/carts/{{createCart.response.body.id}}/items/p_lamp
+Content-Type: application/json
+
+{ "quantity": 4 }
+
+### 400 VALIDATION_ERROR: quantity above 1000
+PUT {{base}}/carts/{{createCart.response.body.id}}/items/p_cable
+Content-Type: application/json
+
+{ "quantity": 1001 }
+
+### 404 CART_NOT_FOUND
+GET {{base}}/carts/0b8f2d4e-6a1c-4e3b-8d5f-7a9c1e3b5d7f

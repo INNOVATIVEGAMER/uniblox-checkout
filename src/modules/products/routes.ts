@@ -5,8 +5,7 @@ import type { Db } from '../../db/client';
 import { products } from '../../db/schema';
 import { MAX_UNIT_PRICE_PAISE } from '../../domain/money';
 import { AppError, validate } from '../../errors';
-
-const productIdSchema = z.string().regex(/^p_[a-z0-9_]{1,60}$/, 'Invalid product id');
+import { productIdSchema } from './id';
 
 const productParamsSchema = z.object({ id: productIdSchema });
 

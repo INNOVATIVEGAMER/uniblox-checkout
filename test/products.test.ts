@@ -1,9 +1,12 @@
-import { asc, sql } from 'drizzle-orm';
+import { asc, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { products } from '../src/db/schema';
 import { SEED_PRODUCTS, seed } from '../src/db/seed';
-import { createTestApp, patchJson } from './helpers/app';
+import { MAX_UNIT_PRICE_PAISE } from '../src/domain/money';
+import { createTestApp, sendJson } from './helpers/app';
+import { holdLock } from './helpers/barrier';
+import { withCleanup } from './helpers/cleanup';
 import { resetDb } from './helpers/db';
 
 const { app, db, pool } = createTestApp();
@@ -45,7 +48,7 @@ describe('PATCH /admin/products/:id', () => {
     const lamp = SEED_PRODUCTS.find((p) => p.id === 'p_lamp');
     const expected = { ...lamp, ...change };
 
-    const res = await patchJson(app, '/admin/products/p_lamp', change);
+    const res = await sendJson(app, 'PATCH', '/admin/products/p_lamp', change);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual(expected);
 
@@ -53,7 +56,7 @@ describe('PATCH /admin/products/:id', () => {
   });
 
   it('changes several fields at once and trims the name', async () => {
-    const res = await patchJson(app, '/admin/products/p_cable', { name: '  Braided Cable ', pricePaise: 0, stock: 0 });
+    const res = await sendJson(app, 'PATCH', '/admin/products/p_cable', { name: '  Braided Cable ', pricePaise: 0, stock: 0 });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ id: 'p_cable', name: 'Braided Cable', pricePaise: 0, stock: 0 });
   });
@@ -69,22 +72,38 @@ describe('PATCH /admin/products/:id', () => {
 
   it('returns 503 LOCK_TIMEOUT when the row stays locked past LOCK_TIMEOUT_MS', async () => {
     const short = createTestApp({ LOCK_TIMEOUT_MS: '200' });
-    const holder = await pool.connect();
-    try {
-      await holder.query('BEGIN');
-      await holder.query(`SELECT 1 FROM products WHERE id = 'p_lamp' FOR UPDATE`);
-
-      const res = await patchJson(short.app, '/admin/products/p_lamp', { stock: 99 });
-      expect(res.status).toBe(503);
-      expect(await res.json()).toEqual({
-        error: { code: 'LOCK_TIMEOUT', message: expect.any(String) },
-      });
-    } finally {
-      await holder.query('ROLLBACK');
-      holder.release();
-      await short.pool.end();
-    }
+    const lock = await holdLock({ table: 'products', id: 'p_lamp' });
+    await withCleanup(
+      async () => {
+        const res = await sendJson(short.app, 'PATCH', '/admin/products/p_lamp', { stock: 99 });
+        expect(res.status).toBe(503);
+        expect(await res.json()).toEqual({
+          error: { code: 'LOCK_TIMEOUT', message: expect.any(String) },
+        });
+      },
+      lock.release,
+      () => short.pool.end(),
+    );
     expect(await listProducts()).toEqual(SEED_BY_ID);
+  });
+});
+
+describe('products table', () => {
+  const setLampPrice = (pricePaise: number) =>
+    db.update(products).set({ pricePaise }).where(eq(products.id, 'p_lamp'));
+
+  it('accepts a price at MAX_UNIT_PRICE_PAISE', async () => {
+    await setLampPrice(MAX_UNIT_PRICE_PAISE);
+    expect((await listProducts()).find((p) => p.id === 'p_lamp')?.pricePaise).toBe(MAX_UNIT_PRICE_PAISE);
+  });
+
+  it.each([
+    ['above MAX_UNIT_PRICE_PAISE', MAX_UNIT_PRICE_PAISE + 1],
+    ['below zero', -1],
+  ])('rejects a price %s with the range CHECK, even when the write bypasses the API', async (_label, pricePaise) => {
+    await expect(setLampPrice(pricePaise)).rejects.toMatchObject({
+      cause: { code: '23514', constraint: 'products_price_paise_range' },
+    });
   });
 });
 

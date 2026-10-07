@@ -10,9 +10,9 @@ export function createTestApp(overrides: Record<string, string> = {}) {
   return { app: createApp({ db }), db, pool, config };
 }
 
-export function patchJson(app: TestApp, path: string, body: unknown) {
+export function sendJson(app: TestApp, method: 'PATCH' | 'PUT', path: string, body: unknown) {
   return app.request(path, {
-    method: 'PATCH',
+    method,
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   });
