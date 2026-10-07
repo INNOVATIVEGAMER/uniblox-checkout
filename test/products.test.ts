@@ -5,6 +5,7 @@ import { products } from '../src/db/schema';
 import { SEED_PRODUCTS, seed } from '../src/db/seed';
 import { createTestApp, sendJson } from './helpers/app';
 import { holdLock } from './helpers/barrier';
+import { withCleanup } from './helpers/cleanup';
 import { resetDb } from './helpers/db';
 
 const { app, db, pool } = createTestApp();
@@ -71,16 +72,17 @@ describe('PATCH /admin/products/:id', () => {
   it('returns 503 LOCK_TIMEOUT when the row stays locked past LOCK_TIMEOUT_MS', async () => {
     const short = createTestApp({ LOCK_TIMEOUT_MS: '200' });
     const lock = await holdLock({ table: 'products', id: 'p_lamp' });
-    try {
-      const res = await sendJson(short.app, 'PATCH', '/admin/products/p_lamp', { stock: 99 });
-      expect(res.status).toBe(503);
-      expect(await res.json()).toEqual({
-        error: { code: 'LOCK_TIMEOUT', message: expect.any(String) },
-      });
-    } finally {
-      await lock.release();
-      await short.pool.end();
-    }
+    await withCleanup(
+      async () => {
+        const res = await sendJson(short.app, 'PATCH', '/admin/products/p_lamp', { stock: 99 });
+        expect(res.status).toBe(503);
+        expect(await res.json()).toEqual({
+          error: { code: 'LOCK_TIMEOUT', message: expect.any(String) },
+        });
+      },
+      lock.release,
+      () => short.pool.end(),
+    );
     expect(await listProducts()).toEqual(SEED_BY_ID);
   });
 });

@@ -6,6 +6,7 @@ import { MAX_CART_LINES } from '../src/domain/money';
 import { createTestApp } from './helpers/app';
 import { barrier, holdLock } from './helpers/barrier';
 import { bulkId, cartRequests, cartViewSchema, fillCart } from './helpers/carts';
+import { withCleanup } from './helpers/cleanup';
 import { resetDb } from './helpers/db';
 
 // The app pool's default max of 10 covers every fan-out here. The barrier uses its own connections.
@@ -71,11 +72,7 @@ describe('holdLock', () => {
 
   it('holds the advisory lock until release', async () => {
     const lock = await holdLock({ advisoryLock: 42 });
-    try {
-      expect(await tryAdvisoryLock(42)).toBe(false);
-    } finally {
-      await lock.release();
-    }
+    await withCleanup(async () => expect(await tryAdvisoryLock(42)).toBe(false), lock.release);
     expect(await tryAdvisoryLock(42)).toBe(true);
   });
 });
