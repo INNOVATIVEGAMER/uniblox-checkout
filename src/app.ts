@@ -7,6 +7,7 @@ import { checkoutRoutes } from './modules/checkout/routes';
 import { couponsRoutes } from './modules/coupons/routes';
 import { ordersRoutes } from './modules/orders/routes';
 import type { PaymentGateway } from './modules/payments/gateway';
+import { paymentsRoutes } from './modules/payments/routes';
 import { productsRoutes } from './modules/products/routes';
 
 export function createApp({ config, gateway, db }: { config: Config; gateway: PaymentGateway; db: Db }) {
@@ -16,6 +17,7 @@ export function createApp({ config, gateway, db }: { config: Config; gateway: Pa
     .route('/', checkoutRoutes({ db, gateway, config }))
     .route('/', ordersRoutes({ db }))
     .route('/', couponsRoutes({ db, config }))
+    .route('/', paymentsRoutes({ db, gateway, config }))
     .notFound(notFound)
     .onError(onError);
 }

@@ -3,8 +3,9 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { AppError, validate } from '../../errors';
 import { cartParamsSchema } from '../carts/id';
+import type { RecoveryDeps } from '../payments/recovery';
 import { checkoutBodySchema } from './input';
-import { type CheckoutDeps, checkout } from './service';
+import { checkout } from './service';
 
 const idempotencyHeaderSchema = z.object({ 'Idempotency-Key': z.string().min(1).max(255) });
 
@@ -12,7 +13,7 @@ const requireIdempotencyKey = zValidator('header', idempotencyHeaderSchema, (res
   if (!result.success) throw new AppError('IDEMPOTENCY_KEY_INVALID');
 });
 
-export function checkoutRoutes(deps: CheckoutDeps) {
+export function checkoutRoutes(deps: RecoveryDeps) {
   return new Hono().post(
     '/carts/:id/checkout',
     validate('param', cartParamsSchema),

@@ -1,5 +1,4 @@
 import { and, asc, eq, sql } from 'drizzle-orm';
-import type { Config } from '../../config';
 import type { Db, Tx } from '../../db/client';
 import { cartItems, carts, coupons, idempotencyKeys, orderItems, orders, products } from '../../db/schema';
 import { priceLines } from '../../domain/money';
@@ -8,16 +7,13 @@ import { lockOpenCart } from '../carts/service';
 import { lockAvailableCoupon } from '../coupons/service';
 import { type CheckoutResponse, loadOrderView, toCheckoutResponse } from '../orders/view';
 import { finalizeOrder } from '../payments/finalize';
-import { type PaymentGateway, type Resolution, zeroTotalResolution } from '../payments/gateway';
+import { type Resolution, zeroTotalResolution } from '../payments/gateway';
+import type { PendingOrder, RecoveryDeps } from '../payments/recovery';
 import { lockProducts } from '../products/lock';
 import { type Claim, claimKey, completeKeyWithError, requestHash } from './idempotency';
 import type { CheckoutInput } from './input';
 
-export type CheckoutDeps = { db: Db; gateway: PaymentGateway; config: Pick<Config, 'GATEWAY_TIMEOUT_MS'> };
-
-type ReservedOrder = { id: string; totalPaise: number };
-
-type ReserveOutcome = Exclude<Claim, { kind: 'claimed' }> | { kind: 'reserved'; order: ReservedOrder };
+type ReserveOutcome = Exclude<Claim, { kind: 'claimed' }> | { kind: 'reserved'; order: PendingOrder };
 
 /**
  * Phase 1. Every check runs before the first write, inside a savepoint. A final error rolls back to the
@@ -44,7 +40,7 @@ export async function reservePhase(db: Db, input: CheckoutInput, key: string, ha
   return outcome;
 }
 
-async function reserve(sp: Tx, { cartId, couponCode, expectedTotalPaise }: CheckoutInput, key: string): Promise<ReservedOrder> {
+async function reserve(sp: Tx, { cartId, couponCode, expectedTotalPaise }: CheckoutInput, key: string): Promise<PendingOrder> {
   await lockOpenCart(sp, cartId);
 
   const lines = await sp
@@ -108,8 +104,8 @@ async function reserve(sp: Tx, { cartId, couponCode, expectedTotalPaise }: Check
 
 /** Phase 2. Returns null when the outcome is unknown: the charge may still land, so the reservation is held. */
 async function charge(
-  { gateway, config }: CheckoutDeps,
-  order: ReservedOrder,
+  { gateway, config }: RecoveryDeps,
+  order: PendingOrder,
   paymentToken: string,
 ): Promise<Resolution | null> {
   if (order.totalPaise === 0) return zeroTotalResolution;
@@ -128,7 +124,7 @@ function replayed(response: CheckoutResponse): CheckoutResponse {
   return { ...response, headers: { ...response.headers, 'Idempotent-Replayed': 'true' } };
 }
 
-export async function checkout(deps: CheckoutDeps, input: CheckoutInput, key: string): Promise<CheckoutResponse> {
+export async function checkout(deps: RecoveryDeps, input: CheckoutInput, key: string): Promise<CheckoutResponse> {
   const reserved = await reservePhase(deps.db, input, key, requestHash(input));
   if (reserved.kind === 'stored') return replayed({ status: reserved.status, body: reserved.body, headers: {} });
   if (reserved.kind === 'order') return replayed(toCheckoutResponse(await loadOrderView(deps.db, reserved.orderId)));
