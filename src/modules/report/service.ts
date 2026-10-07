@@ -62,7 +62,7 @@ export function loadReport(db: Db, config: ReportConfig) {
       );
 
       const { grossRevenuePaise, discountsPaise, netRevenuePaise, ...ordersByStatus } = orderTotals;
-      const { lastMilestone: rewarded, ...couponsByStatus } = couponTotals;
+      const { lastMilestone: rewarded, ...couponCounts } = couponTotals;
       const n = config.COUPON_EVERY_N_ORDERS;
       const { reached, unrewarded } = milestoneProgress({ paidOrders: ordersByStatus.paid, n, lastMilestone: rewarded });
       return {
@@ -72,7 +72,7 @@ export function loadReport(db: Db, config: ReportConfig) {
         grossRevenuePaise,
         discountsPaise,
         netRevenuePaise,
-        coupons: couponsByStatus,
+        coupons: couponCounts,
         milestones: { n, reached, rewarded, unrewarded },
       };
     },
