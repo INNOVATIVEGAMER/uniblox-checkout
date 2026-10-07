@@ -385,3 +385,49 @@ Resolves every pending order older than `PAYMENT_PENDING_TTL_SECONDS`. Younger o
 - **`stillPending`:** every order still `pending_payment` afterwards. That includes orders younger than the TTL, and stale orders that couldn't be resolved, for example because the gateway errored or a lock wait timed out.
 
 A failure on one order never fails the call, so this route has no error responses.
+
+### Reporting (admin)
+
+Both routes only read. Neither resolves a pending order, so a stale order stays pending until a mutating request or `POST /admin/payments/reconcile` resolves it.
+
+### `GET /admin/orders?status=` (admin)
+
+Lists order views, oldest first. `status` is optional and must be `pending_payment`, `paid` or `failed`. The list isn't paginated.
+
+**200**: an array of order views, each the same as `GET /orders/:id` returns.
+
+| Status | Code               | When                                       |
+| ------ | ------------------ | ------------------------------------------ |
+| 400    | `VALIDATION_ERROR` | `status` is not one of the three statuses, or is repeated |
+
+### `GET /admin/report` (admin)
+
+Sales and coupon figures, all read from one snapshot. In the example, n is 2: three cable orders and one lamp order with a 10% coupon are paid, and a second coupon is held by the pending order.
+
+**200**:
+
+```json
+{
+  "paidOrders": 4,
+  "ordersByStatus": { "paid": 4, "pending_payment": 1, "failed": 1 },
+  "quantityByProduct": [
+    { "productId": "p_cable", "name": "USB-C Cable", "quantity": 3 },
+    { "productId": "p_lamp", "name": "Limited Edition Desk Lamp", "quantity": 1 }
+  ],
+  "grossRevenuePaise": 354897,
+  "discountsPaise": 24990,
+  "netRevenuePaise": 329907,
+  "coupons": { "generated": 2, "available": 0, "reserved": 1, "redeemed": 1 },
+  "milestones": { "n": 2, "reached": 2, "rewarded": 2, "unrewarded": 0 }
+}
+```
+
+- **Sales count paid orders only.** `grossRevenuePaise`, `discountsPaise` and `netRevenuePaise` sum the subtotals, discounts and totals of paid orders, so net is gross less discounts.
+- **`quantityByProduct`:** units sold per product, from the order lines of paid orders, ordered by product ID. `name` is the product's current name; an order's own lines keep the name it was sold under.
+- **`coupons`:** how many were generated, and how many are in each status.
+- **`milestones`:** `reached` is paid orders divided by n, rounded down. `rewarded` is the highest milestone with a coupon. `unrewarded` is how many `POST /admin/coupons` can still generate.
+
+The report reconciles with the list: summing `GET /admin/orders?status=paid` gives the sales figures, redeemed coupons equal paid orders with a coupon, and reserved coupons equal pending orders with a coupon. The two are separate requests, so they agree only when no checkout runs between them.
+
+No error responses.
+

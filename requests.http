@@ -248,3 +248,16 @@ Idempotency-Key: timeout-1-{{timeoutCart.response.body.id}}
 
 ### Admin: resolve every stale pending order. Before the TTL: { "resolved": [], "stillPending": 1 }
 POST {{base}}/admin/payments/reconcile
+
+### Admin: list every order, oldest first
+GET {{base}}/admin/orders
+
+### Admin: list paid orders. Their sums equal the report's sales figures
+GET {{base}}/admin/orders?status=paid
+
+### 400 VALIDATION_ERROR: unknown status
+GET {{base}}/admin/orders?status=shipped
+
+### Admin: the sales and coupon report. Calling it twice gives the same result and changes nothing
+GET {{base}}/admin/report
+
