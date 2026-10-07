@@ -6,7 +6,7 @@ import { products } from '../../db/schema';
 import { MAX_UNIT_PRICE_PAISE } from '../../domain/money';
 import { AppError, validate } from '../../errors';
 
-const productIdSchema = z.string().regex(/^p_[a-z0-9_]{1,60}$/, 'Invalid product id');
+export const productIdSchema = z.string().regex(/^p_[a-z0-9_]{1,60}$/, 'Invalid product id');
 
 const productParamsSchema = z.object({ id: productIdSchema });
 

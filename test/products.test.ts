@@ -3,7 +3,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { products } from '../src/db/schema';
 import { SEED_PRODUCTS, seed } from '../src/db/seed';
-import { createTestApp, patchJson } from './helpers/app';
+import { createTestApp, sendJson } from './helpers/app';
 import { resetDb } from './helpers/db';
 
 const { app, db, pool } = createTestApp();
@@ -45,7 +45,7 @@ describe('PATCH /admin/products/:id', () => {
     const lamp = SEED_PRODUCTS.find((p) => p.id === 'p_lamp');
     const expected = { ...lamp, ...change };
 
-    const res = await patchJson(app, '/admin/products/p_lamp', change);
+    const res = await sendJson(app, 'PATCH', '/admin/products/p_lamp', change);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual(expected);
 
@@ -53,7 +53,7 @@ describe('PATCH /admin/products/:id', () => {
   });
 
   it('changes several fields at once and trims the name', async () => {
-    const res = await patchJson(app, '/admin/products/p_cable', { name: '  Braided Cable ', pricePaise: 0, stock: 0 });
+    const res = await sendJson(app, 'PATCH', '/admin/products/p_cable', { name: '  Braided Cable ', pricePaise: 0, stock: 0 });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ id: 'p_cable', name: 'Braided Cable', pricePaise: 0, stock: 0 });
   });
@@ -74,7 +74,7 @@ describe('PATCH /admin/products/:id', () => {
       await holder.query('BEGIN');
       await holder.query(`SELECT 1 FROM products WHERE id = 'p_lamp' FOR UPDATE`);
 
-      const res = await patchJson(short.app, '/admin/products/p_lamp', { stock: 99 });
+      const res = await sendJson(short.app, 'PATCH', '/admin/products/p_lamp', { stock: 99 });
       expect(res.status).toBe(503);
       expect(await res.json()).toEqual({
         error: { code: 'LOCK_TIMEOUT', message: expect.any(String) },
