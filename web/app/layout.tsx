@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
 import Link from 'next/link';
+import { ResponsePanel } from '@/components/response-panel';
 import { Providers } from './providers';
 import './globals.css';
 
@@ -28,7 +29,12 @@ export default function RootLayout({ children }: LayoutProps<'/'>) {
               </Link>
             </nav>
           </header>
-          <main className="mx-auto max-w-7xl px-4 py-6">{children}</main>
+          <div className="mx-auto grid max-w-7xl gap-6 px-4 py-6 lg:grid-cols-[minmax(0,1fr)_400px]">
+            <main className="min-w-0">{children}</main>
+            <aside>
+              <ResponsePanel />
+            </aside>
+          </div>
         </Providers>
       </body>
     </html>
