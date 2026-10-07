@@ -1,16 +1,18 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { eq } from 'drizzle-orm';
 import { z } from 'zod';
+import { coupons } from '../src/db/schema';
 import { SEED_PRODUCTS } from '../src/db/seed';
 import { discount } from '../src/domain/money';
 import { COUPON_GENERATION_LOCK, generateCoupon as generateCouponDirect } from '../src/modules/coupons/service';
 import { FakeGateway } from '../src/modules/payments/fake-gateway';
 import { createTestApp } from './helpers/app';
 import { barrier, lineUp } from './helpers/barrier';
-import { cartRequests } from './helpers/carts';
+import { cartRequests, cartViewSchema } from './helpers/carts';
 import { expectOrder, idleInTransaction, newKey, orderCount, postCheckout, throwingGateway, visa } from './helpers/checkout';
 import { withCleanup } from './helpers/cleanup';
 import { couponRow, couponSchema, generateCoupon, generatedSchema, insertCoupon, payOrders } from './helpers/coupons';
-import { resetDb } from './helpers/db';
+import { resetDb, snapshotDb } from './helpers/db';
 import { expectError } from './helpers/errors';
 import { gated } from './helpers/gate';
 import { firstFulfilled, within } from './helpers/within';
@@ -219,3 +221,77 @@ describe('T19 a 100% coupon', () => {
     );
   });
 });
+
+const preview = async (cartId: string, query: string) => app.request(`/carts/${cartId}?${query}`);
+
+describe('T24 the coupon preview', () => {
+  it('shows the discount and total for an available coupon, normalises the code, and writes nothing', async () => {
+    const coupon = await insertCoupon(db);
+    const cartId = await cartWith({ p_cable: 1 });
+    const before = await snapshotDb(db);
+
+    const res = await preview(cartId, `couponCode=${encodeURIComponent(` ${coupon.code.toLowerCase()} `)}`);
+
+    expect(res.status).toBe(200);
+    expect(cartViewSchema.parse(await res.json())).toMatchObject({
+      status: 'open',
+      subtotalPaise: 34_999,
+      coupon: { code: coupon.code, percentOff: 10 },
+      discountPaise: 3_499,
+      totalPaise: 31_500,
+    });
+    expect(await snapshotDb(db)).toEqual(before);
+  });
+
+  it('shows coupon: null and no discount without a code', async () => {
+    const cartId = await cartWith({ p_cable: 1 });
+    expect(await getCartView(cartId)).toMatchObject({ coupon: null, discountPaise: 0, totalPaise: 34_999 });
+  });
+
+  it('gets 409 COUPON_RESERVED for a coupon held by a pending payment, on another cart and on the holding cart', async () => {
+    const coupon = await insertCoupon(db);
+    const gate = gated(new FakeGateway(), { at: 'before' });
+    const holder = await cartWith({ p_mouse: 1 });
+    const pending = postCheckout(appWith(gate.gateway), holder, newKey(), { ...visa(MOUSE_PAISE - 12_995), couponCode: coupon.code });
+
+    await withCleanup(
+      async () => {
+        await gate.entered();
+        await expectError(await preview(await cartWith({ p_cable: 1 }), `couponCode=${coupon.code}`), 409, 'COUPON_RESERVED');
+        await expectError(await preview(holder, `couponCode=${coupon.code}`), 409, 'COUPON_RESERVED');
+      },
+      async () => gate.release(),
+      () => Promise.allSettled([pending]),
+    );
+  });
+
+  it('gets 409 COUPON_ALREADY_REDEEMED for a redeemed coupon', async () => {
+    const coupon = await insertCoupon(db);
+    await db.update(coupons).set({ status: 'redeemed', redeemedAt: new Date() }).where(eq(coupons.id, coupon.id));
+    await expectError(await preview(await cartWith({ p_cable: 1 }), `couponCode=${coupon.code}`), 409, 'COUPON_ALREADY_REDEEMED');
+  });
+
+  it('gets 422 COUPON_INVALID for an unknown code', async () => {
+    await expectError(await preview(await cartWith({ p_cable: 1 }), 'couponCode=SAVE10-M9-NOPE'), 422, 'COUPON_INVALID');
+  });
+
+  it('checks the cart before the coupon: an unknown cart gets 404', async () => {
+    await expectError(await preview('0b8f2d4e-6a1c-4e3b-8d5f-7a9c1e3b5d7f', 'couponCode=SAVE10-M9-NOPE'), 404, 'CART_NOT_FOUND');
+  });
+
+  it.each([
+    ['an empty code', 'couponCode='],
+    ['a whitespace-only code', 'couponCode=%20%20'],
+    ['a code over 64 characters', `couponCode=${'A'.repeat(65)}`],
+    ['a repeated parameter', 'couponCode=A&couponCode=B'],
+  ])('gets 400 VALIDATION_ERROR for %s', async (_label, query) => {
+    const error = await expectError(await preview(await cartWith({ p_cable: 1 }), query), 400, 'VALIDATION_ERROR');
+    expect(error.details).toContainEqual(expect.objectContaining({ path: 'query.couponCode' }));
+  });
+});
+
+async function getCartView(cartId: string) {
+  const res = await app.request(`/carts/${cartId}`);
+  expect(res.status).toBe(200);
+  return cartViewSchema.parse(await res.json());
+}

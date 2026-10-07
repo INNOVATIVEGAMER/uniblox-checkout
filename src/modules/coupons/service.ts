@@ -30,6 +30,11 @@ export function availableCoupon<Coupon extends { status: typeof coupons.$inferSe
   return coupon;
 }
 
+export async function findAvailableCoupon(db: Db, code: string) {
+  const [coupon] = await db.select(couponColumns).from(coupons).where(eq(coupons.code, code));
+  return availableCoupon(coupon);
+}
+
 export async function lockAvailableCoupon(tx: Tx, code: string) {
   const [coupon] = await tx.select(couponColumns).from(coupons).where(eq(coupons.code, code)).for('no key update');
   return availableCoupon(coupon);

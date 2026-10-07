@@ -36,6 +36,7 @@ describe('cart lifecycle', () => {
       orderId: null,
       lines: [],
       subtotalPaise: 0,
+      coupon: null,
       discountPaise: 0,
       totalPaise: 0,
     });
@@ -102,6 +103,7 @@ describe('T24 cart view', () => {
         },
       ],
       subtotalPaise: 234_947,
+      coupon: null,
       discountPaise: 0,
       totalPaise: 234_947,
     });

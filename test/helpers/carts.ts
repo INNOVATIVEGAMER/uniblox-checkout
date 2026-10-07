@@ -20,6 +20,7 @@ export const cartViewSchema = z.strictObject({
     }),
   ),
   subtotalPaise: z.int(),
+  coupon: z.strictObject({ code: z.string(), percentOff: z.int() }).nullable(),
   discountPaise: z.int(),
   totalPaise: z.int(),
 });

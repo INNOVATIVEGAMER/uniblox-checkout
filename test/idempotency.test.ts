@@ -6,7 +6,7 @@ import type { ErrorCode } from '../src/errors';
 import { FakeGateway } from '../src/modules/payments/fake-gateway';
 import { createTestApp, sendJson } from './helpers/app';
 import { barrier, holdLock } from './helpers/barrier';
-import { cartRequests } from './helpers/carts';
+import { cartRequests, cartViewSchema } from './helpers/carts';
 import {
   type CheckoutBody,
   expectOrder,
@@ -209,6 +209,18 @@ describe('T21 price changed after add', () => {
 
     const paid = await expectOrder(await postCheckout(app, cartId, newKey(), visa(200_000)), 201);
     expect(paid.totalPaise).toBe(200_000);
+  });
+
+  it("accepts the coupon preview's totalPaise first time, with the discount floored once at order level", async () => {
+    const coupon = await insertCoupon(db);
+    const cartId = await cartWith({ p_cable: 3, p_mouse: 1 });
+    const res = await app.request(`/carts/${cartId}?couponCode=${coupon.code.toLowerCase()}`);
+    expect(res.status).toBe(200);
+    const preview = cartViewSchema.parse(await res.json());
+    expect(preview).toMatchObject({ subtotalPaise: 234_947, discountPaise: 23_494, totalPaise: 211_453, coupon: { code: coupon.code, percentOff: 10 } });
+
+    const paid = await expectOrder(await postCheckout(app, cartId, newKey(), { ...visa(preview.totalPaise), couponCode: coupon.code }), 201);
+    expect(paid).toMatchObject({ discountPaise: 23_494, totalPaise: 211_453 });
   });
 
   it("accepts the cart view's totalPaise first time", async () => {
