@@ -6,7 +6,6 @@ import { useState } from 'react';
 import {
   ApiError,
   type ApiResponse,
-  type Cart,
   type CheckoutBody,
   type Order,
   PAYMENT_TOKENS,
@@ -27,7 +26,7 @@ type Attempt = { cartId: string; key: string; body: CheckoutBody };
  * One attempt is one Idempotency-Key and the exact body it was first sent with. Retry resends both; Change body
  * resends the key with a different total, which the API rejects once the key has a stored outcome.
  */
-export function CheckoutPanel({ cart, quote }: { cart: Cart; quote: Quote | null }) {
+export function CheckoutPanel({ cartId, quote }: { cartId: string; quote: Quote | null }) {
   const [paymentToken, setPaymentToken] = useState<PaymentToken>('pm_card_visa');
   const [attempt, setAttempt] = useState<Attempt | null>(null);
   const send = useMutation({
@@ -35,12 +34,12 @@ export function CheckoutPanel({ cart, quote }: { cart: Cart; quote: Quote | null
       Promise.allSettled(requests.map(({ cartId, key, body }) => api.checkout(cartId, key, body))),
   });
 
-  const canStart = cart.status === 'open' && quote !== null && !send.isPending;
+  const canStart = quote !== null && !send.isPending;
   const sent = send.variables?.[0];
 
   function newAttempt(): Attempt | null {
     if (quote === null) return null;
-    const next = { cartId: cart.id, key: crypto.randomUUID(), body: { ...quote, paymentToken } };
+    const next = { cartId, key: crypto.randomUUID(), body: { ...quote, paymentToken } };
     setAttempt(next);
     return next;
   }

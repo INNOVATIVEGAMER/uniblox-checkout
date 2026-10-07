@@ -39,10 +39,12 @@ function CartBody({ cart }: { cart: Cart }) {
   const [couponInput, setCouponInput] = useState('');
   const [appliedCoupon, setAppliedCoupon] = useState<string | null>(null);
   const open = cart.status === 'open';
-  // A closed cart's coupon is held or redeemed by its own order, so a refetched preview would report it as taken.
+  // The subtotal is the only cart input to the discount, so it refetches the preview. A global refresh would race
+  // checkout's own cart refetch and price a cart that just closed, reporting its coupon as taken by its own order.
   const preview = useQuery({
-    queryKey: ['cart', cart.id, appliedCoupon],
+    queryKey: ['coupon-preview', cart.id, appliedCoupon, cart.subtotalPaise],
     queryFn: !open || appliedCoupon === null ? skipToken : () => api.getCart(cart.id, appliedCoupon),
+    meta: { refreshOnMutation: false },
   });
   const editLine = useMutation({
     mutationFn: ({ productId, quantity }: { productId: string; quantity: number | null }) =>
@@ -64,7 +66,7 @@ function CartBody({ cart }: { cart: Cart }) {
       </div>
 
       {!open && <ClosedCartNotice cart={cart} />}
-      {editLine.error && <ErrorNotice error={editLine.error} />}
+      {open && editLine.error && <ErrorNotice error={editLine.error} />}
 
       {cart.lines.length === 0 ? (
         <p className="text-sm text-muted-foreground">No lines yet. Add a product.</p>
@@ -82,7 +84,7 @@ function CartBody({ cart }: { cart: Cart }) {
           <TableBody>
             {cart.lines.map((line) => (
               <CartLineRow
-                key={`${line.productId}:${line.quantity}`}
+                key={`${line.productId}:${line.quantity}:${cart.status}`}
                 line={line}
                 disabled={!open || editLine.isPending}
                 onSet={(quantity) => editLine.mutate({ productId: line.productId, quantity })}
@@ -125,17 +127,18 @@ function CartBody({ cart }: { cart: Cart }) {
         </>
       )}
 
-      <CheckoutPanel cart={cart} quote={quoteFor(cart, appliedCoupon, preview)} />
+      <CheckoutPanel cartId={cart.id} quote={quoteFor(cart, appliedCoupon, preview)} />
     </div>
   );
 }
 
 /**
  * What checkout sends: the total on screen, with the coupon only when its preview priced that total. Null while the
- * preview is loading, so Pay can't send a coupon with the undiscounted total.
+ * preview is loading, so Pay can't send a coupon with the undiscounted total. A closed cart sends its plain total: the
+ * API answers CART_PAYMENT_PENDING or CART_CHECKED_OUT before it prices anything.
  */
 function quoteFor(cart: Cart, appliedCoupon: string | null, preview: UseQueryResult<Cart>): Quote | null {
-  if (appliedCoupon === null || preview.isError) return { expectedTotalPaise: cart.totalPaise };
+  if (cart.status !== 'open' || appliedCoupon === null || preview.isError) return { expectedTotalPaise: cart.totalPaise };
   if (preview.isFetching || !preview.data?.coupon) return null;
   return { expectedTotalPaise: preview.data.totalPaise, couponCode: preview.data.coupon.code };
 }
