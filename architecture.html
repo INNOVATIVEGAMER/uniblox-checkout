@@ -317,10 +317,10 @@ idempotency_keys
 
 // order view, used by GET /orders/:id, the 201 and 202 checkout responses, and every replay
 { "id", "cartId", "status",
-  "lines": [{ "productId", "productName", "unitPricePaise", "quantity", "lineTotalPaise" }],
   "subtotalPaise", "discountPaise", "totalPaise",
   "coupon": null | { "code", "percentOff" },
-  "paymentRef", "failureReason", "createdAt", "resolvedAt" }
+  "paymentRef", "failureReason", "createdAt", "resolvedAt",
+  "lines": [{ "productId", "productName", "unitPricePaise", "quantity", "lineTotalPaise" }] }
 
 // 402: the error envelope
 { "error": { "code": "PAYMENT_FAILED", "message", "details": { "orderId", "reason" } } }</code></pre>
@@ -724,7 +724,7 @@ new AppError('CART_NOT_FOUND', details?)    // status and final come from ERRORS
     checkout/             routes.ts, service.ts (phases 0–3, reservePhase), idempotency.ts (claimKey, completeKeyWithError, replay)
     payments/             gateway.ts, fake-gateway.ts, finalize.ts (finalizeOrder), recovery.ts (findStalePending,
                           resolvePendingOrder), routes.ts (POST /admin/payments/reconcile)
-    orders/               routes.ts (GET /orders/:id, GET /admin/orders), view.ts (loadOrderView, toOrderView, toCheckoutResponse)
+    orders/               routes.ts (GET /orders/:id, GET /admin/orders), view.ts (loadOrderView, toCheckoutResponse)
     coupons/              routes.ts, service.ts, code.ts (couponCodeSchema, generator)
     report/               routes.ts, service.ts
 drizzle/                  generated migrations

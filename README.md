@@ -60,18 +60,24 @@ Every error uses one envelope:
 
 `code` is the stable contract to branch on, and `message` is for humans. `details` is present when there is something to act on: for a validation error, it lists each failing field.
 
-| Status | Code               | When                                                                                                |
-| ------ | ------------------ | --------------------------------------------------------------------------------------------------- |
-| 400    | `VALIDATION_ERROR` | A malformed path parameter or body field, malformed JSON, a non-JSON Content-Type, or an empty PATCH |
-| 404    | `PRODUCT_NOT_FOUND` | The product ID in the path does not exist                                                           |
-| 404    | `CART_NOT_FOUND`   | The cart ID in the path does not exist                                                              |
-| 404    | `NOT_FOUND`        | No route matches the method and path                                                                |
-| 409    | `CART_CHECKED_OUT` | The cart is checked out, so it can no longer change                                                 |
-| 409    | `CART_PAYMENT_PENDING` | A payment for the cart is in progress. Retry once it resolves                                   |
-| 409    | `INSUFFICIENT_STOCK` | The requested quantity is above the stock available. `details` lists `{ productId, requested, available }` |
-| 422    | `CART_LINE_LIMIT`  | Adding a new line to a cart that already has 50 lines. `details` is `{ maxLines }`                  |
-| 500    | `INTERNAL`         | An unexpected failure. It is logged, and no internals are returned                                  |
-| 503    | `LOCK_TIMEOUT`     | A row lock was not granted within `LOCK_TIMEOUT_MS`. Safe to retry                                  |
+| Status | Code                      | When                                                                                                |
+| ------ | ------------------------- | --------------------------------------------------------------------------------------------------- |
+| 400    | `VALIDATION_ERROR`        | A malformed path parameter or body field, malformed JSON, a non-JSON Content-Type, or an empty PATCH |
+| 400    | `IDEMPOTENCY_KEY_INVALID` | The checkout's `Idempotency-Key` header is missing, empty, or over 255 characters                  |
+| 402    | `PAYMENT_FAILED`          | The payment was declined. `details` is `{ orderId, reason }`                                        |
+| 404    | `PRODUCT_NOT_FOUND`       | The product ID in the path does not exist                                                           |
+| 404    | `CART_NOT_FOUND`          | The cart ID in the path does not exist                                                              |
+| 404    | `ORDER_NOT_FOUND`         | The order ID in the path does not exist                                                             |
+| 404    | `NOT_FOUND`               | No route matches the method and path                                                                |
+| 409    | `CART_CHECKED_OUT`        | The cart is checked out, so it can no longer change. `details` is `{ orderId }`                     |
+| 409    | `CART_PAYMENT_PENDING`    | A payment for the cart is in progress. Retry once it resolves. `details` is `{ orderId }`           |
+| 409    | `INSUFFICIENT_STOCK`      | The requested quantity is above the stock available. `details` lists `{ productId, requested, available }` for every short line |
+| 409    | `PRICE_CHANGED`           | `expectedTotalPaise` doesn't match the cart's current total. `details` is `{ subtotalPaise, discountPaise, totalPaise }` |
+| 422    | `CART_LINE_LIMIT`         | Adding a new line to a cart that already has 50 lines. `details` is `{ maxLines }`                  |
+| 422    | `CART_EMPTY`              | Checking out a cart with no lines                                                                   |
+| 422    | `IDEMPOTENCY_KEY_REUSED`  | The `Idempotency-Key` was already used with a different cart, total or payment token               |
+| 500    | `INTERNAL`                | An unexpected failure. It is logged, and no internals are returned                                  |
+| 503    | `LOCK_TIMEOUT`            | A row lock was not granted within `LOCK_TIMEOUT_MS`. Safe to retry                                  |
 
 ### `GET /products`
 
@@ -126,6 +132,7 @@ The cart view, returned by every cart route:
 {
   "id": "5f0c6a0e-3b1d-4c2a-9e7f-1a2b3c4d5e6f",
   "status": "open",
+  "orderId": null,
   "lines": [
     {
       "productId": "p_cable",
@@ -143,8 +150,9 @@ The cart view, returned by every cart route:
 ```
 
 - **`status`:** `open`, `pending_payment` or `checked_out`. Only an `open` cart can change.
+- **`orderId`:** the cart's live order: the pending one while a payment is in progress, the paid one once checked out, and `null` while the cart is open (a declined order doesn't count).
 - **`lines`:** ordered by product ID. `available` is `stock >= quantity` right now, so it can turn false after an admin lowers the stock.
-- **`totalPaise`:** `subtotalPaise − discountPaise`. The discount stays 0 until coupons arrive.
+- **`totalPaise`:** `subtotalPaise − discountPaise`, and exactly the value checkout accepts as `expectedTotalPaise`. The discount stays 0 until coupons arrive.
 
 ### `POST /carts`
 
@@ -205,3 +213,86 @@ Removes the line. Removing a line that isn't in the cart also succeeds, so a ret
 | 409    | `CART_PAYMENT_PENDING` | The cart's payment is in progress                                        |
 | 409    | `CART_CHECKED_OUT`     | The cart is checked out                                                  |
 | 503    | `LOCK_TIMEOUT`         | The cart is locked by another request for longer than `LOCK_TIMEOUT_MS`  |
+
+### `POST /carts/:id/checkout`
+
+Places the order and pays for it, in one request. Stock is reserved, the payment token is charged, and the order is confirmed. Checkout is the one request that needs an idempotency key: send the same key on every retry of the same checkout.
+
+- **`Idempotency-Key` header:** required, 1–255 characters. Use a new key for each new attempt to pay.
+- **`expectedTotalPaise`:** required. The `totalPaise` the client showed the customer, from the cart view. A mismatch gets `409 PRICE_CHANGED` with the current breakdown, so a price change never charges the customer more than they saw.
+- **`paymentToken`:** 1–255 characters. The fake gateway understands Stripe's test tokens:
+
+| `paymentToken`                            | Outcome                                     |
+| ----------------------------------------- | ------------------------------------------- |
+| `pm_card_visa`                            | Approved                                    |
+| `pm_card_chargeDeclined`                  | Declined, reason `card_declined`            |
+| `pm_card_chargeDeclinedInsufficientFunds` | Declined, reason `insufficient_funds`       |
+| anything else                             | Declined, reason `invalid_payment_method`   |
+
+```http
+POST /carts/5f0c6a0e-3b1d-4c2a-9e7f-1a2b3c4d5e6f/checkout
+Content-Type: application/json
+Idempotency-Key: 8d2b6c1e-checkout-1
+
+{ "expectedTotalPaise": 104997, "paymentToken": "pm_card_visa" }
+```
+
+**201**: the order was paid. The body is the order view (see `GET /orders/:id`), and the cart is now `checked_out`.
+
+**202**, with `Retry-After: 5`: the payment's outcome is unknown, for example because the gateway timed out. The order stays `pending_payment` and keeps its stock reserved. Retry the same request with the same key to get its current state. Resolving these orders arrives with #5.
+
+**402 `PAYMENT_FAILED`**: the payment was declined. The order is `failed`, its stock is released, and the cart is open again, so the client can pay with a new key.
+
+```json
+{ "error": { "code": "PAYMENT_FAILED", "message": "The payment was declined", "details": { "orderId": "…", "reason": "card_declined" } } }
+```
+
+A retry with the same key never charges again. It returns the earlier outcome with the header `Idempotent-Replayed: true`: a key that created an order replays that order's current state (201, 202 or 402), and a key that ended in a final error replays that error. The **Key** column says which errors are stored as the key's final answer. An error that isn't stored leaves the key unused, so the same key can be retried.
+
+| Status | Code                      | When                                                                | Key        |
+| ------ | ------------------------- | ------------------------------------------------------------------- | ---------- |
+| 400    | `VALIDATION_ERROR`        | A malformed `:id`, a missing or invalid body field, an unknown field, or a non-JSON Content-Type | Not stored |
+| 400    | `IDEMPOTENCY_KEY_INVALID` | The header is missing, empty, or over 255 characters                | Not stored |
+| 402    | `PAYMENT_FAILED`          | The payment was declined                                            | Replayed from the order |
+| 404    | `CART_NOT_FOUND`          | No cart has this ID                                                 | Stored     |
+| 409    | `CART_CHECKED_OUT`        | The cart is already checked out. `details.orderId` is its order    | Stored     |
+| 409    | `CART_PAYMENT_PENDING`    | Another payment for this cart is in progress                        | Not stored |
+| 409    | `INSUFFICIENT_STOCK`      | A line needs more than the stock available, including stock held by a payment in progress | Stored |
+| 409    | `PRICE_CHANGED`           | `expectedTotalPaise` doesn't match the current total                | Stored     |
+| 422    | `CART_EMPTY`              | The cart has no lines                                               | Stored     |
+| 422    | `IDEMPOTENCY_KEY_REUSED`  | The key was used with a different cart, total or token              | Not stored |
+| 500    | `INTERNAL`                | An unexpected failure                                               | Not stored, unless the order already exists |
+| 503    | `LOCK_TIMEOUT`            | A row stayed locked for longer than `LOCK_TIMEOUT_MS`               | Not stored, unless the order already exists |
+
+A 500 or 503 that happens after the charge leaves the order `pending_payment`, and the key already points to it, so retries with the same key replay 202.
+
+### `GET /orders/:id`
+
+**200**: the order view. Order lines are a snapshot taken at checkout, so editing a product later never changes an order.
+
+```json
+{
+  "id": "0b8f2d4e-6a1c-4e3b-8d5f-7a9c1e3b5d7f",
+  "cartId": "5f0c6a0e-3b1d-4c2a-9e7f-1a2b3c4d5e6f",
+  "status": "paid",
+  "subtotalPaise": 104997,
+  "discountPaise": 0,
+  "totalPaise": 104997,
+  "paymentRef": "ch_…",
+  "failureReason": null,
+  "createdAt": "2026-10-07T10:00:00.000Z",
+  "resolvedAt": "2026-10-07T10:00:00.120Z",
+  "lines": [
+    { "productId": "p_cable", "productName": "USB-C Cable", "unitPricePaise": 34999, "quantity": 3, "lineTotalPaise": 104997 }
+  ]
+}
+```
+
+- **`status`:** `pending_payment`, `paid` or `failed`.
+- **`paymentRef`:** the gateway's charge reference. It is `null` while pending, after a decline, and for a zero total, which is never charged.
+- **`failureReason`:** the decline reason, set only on a `failed` order.
+
+| Status | Code               | When                     |
+| ------ | ------------------ | ------------------------ |
+| 400    | `VALIDATION_ERROR` | `:id` is not a UUID      |
+| 404    | `ORDER_NOT_FOUND`  | No order has this ID     |

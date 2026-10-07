@@ -7,13 +7,19 @@ import { z } from 'zod';
 
 export const ERRORS = {
   VALIDATION_ERROR: { status: 400, final: false, message: 'The request is invalid' },
+  IDEMPOTENCY_KEY_INVALID: { status: 400, final: false, message: 'The Idempotency-Key header must be 1 to 255 characters' },
+  PAYMENT_FAILED: { status: 402, final: false, message: 'The payment was declined' },
   NOT_FOUND: { status: 404, final: false, message: 'No route matches this method and path' },
   PRODUCT_NOT_FOUND: { status: 404, final: false, message: 'Product not found' },
+  ORDER_NOT_FOUND: { status: 404, final: false, message: 'Order not found' },
   CART_NOT_FOUND: { status: 404, final: true, message: 'Cart not found' },
   CART_CHECKED_OUT: { status: 409, final: true, message: 'The cart is already checked out' },
   CART_PAYMENT_PENDING: { status: 409, final: false, message: 'A payment for this cart is in progress' },
   INSUFFICIENT_STOCK: { status: 409, final: true, message: 'Not enough stock for the requested quantity' },
+  PRICE_CHANGED: { status: 409, final: true, message: 'The cart total no longer matches expectedTotalPaise' },
   CART_LINE_LIMIT: { status: 422, final: false, message: 'The cart has the maximum number of lines' },
+  CART_EMPTY: { status: 422, final: true, message: 'The cart has no lines' },
+  IDEMPOTENCY_KEY_REUSED: { status: 422, final: false, message: 'This Idempotency-Key was used with a different request' },
   INTERNAL: { status: 500, final: false, message: 'Something went wrong' },
   LOCK_TIMEOUT: { status: 503, final: false, message: 'The resource is busy, retry shortly' },
 } as const satisfies Record<string, { status: ContentfulStatusCode; final: boolean; message: string }>;

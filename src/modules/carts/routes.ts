@@ -4,11 +4,10 @@ import type { Db } from '../../db/client';
 import { MAX_LINE_QUANTITY } from '../../domain/money';
 import { validate } from '../../errors';
 import { productIdSchema } from '../products/id';
+import { cartParamsSchema } from './id';
 import { createCart, loadCartView, removeItem, setItemQuantity } from './service';
 
-const cartParamsSchema = z.object({ id: z.uuid() });
-
-const cartItemParamsSchema = z.object({ id: z.uuid(), productId: productIdSchema });
+const cartItemParamsSchema = cartParamsSchema.extend({ productId: productIdSchema });
 
 const setQuantitySchema = z.strictObject({ quantity: z.int().min(1).max(MAX_LINE_QUANTITY) });
 

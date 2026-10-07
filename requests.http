@@ -90,3 +90,92 @@ Content-Type: application/json
 
 ### 404 CART_NOT_FOUND
 GET {{base}}/carts/0b8f2d4e-6a1c-4e3b-8d5f-7a9c1e3b5d7f
+
+### Checkout walkthrough: a cart with 2 cables
+# @name payCart
+POST {{base}}/carts
+
+###
+PUT {{base}}/carts/{{payCart.response.body.id}}/items/p_cable
+Content-Type: application/json
+
+{ "quantity": 2 }
+
+### Pay (201). The total comes from the cart view
+# @name paid
+POST {{base}}/carts/{{payCart.response.body.id}}/checkout
+Content-Type: application/json
+Idempotency-Key: pay-1-{{payCart.response.body.id}}
+
+{ "expectedTotalPaise": 69998, "paymentToken": "pm_card_visa" }
+
+### Replay: the same key returns the same order (201), with Idempotent-Replayed: true, and charges nothing
+POST {{base}}/carts/{{payCart.response.body.id}}/checkout
+Content-Type: application/json
+Idempotency-Key: pay-1-{{payCart.response.body.id}}
+
+{ "expectedTotalPaise": 69998, "paymentToken": "pm_card_visa" }
+
+### 422 IDEMPOTENCY_KEY_REUSED: the same key with another token
+POST {{base}}/carts/{{payCart.response.body.id}}/checkout
+Content-Type: application/json
+Idempotency-Key: pay-1-{{payCart.response.body.id}}
+
+{ "expectedTotalPaise": 69998, "paymentToken": "pm_card_chargeDeclined" }
+
+### The order
+GET {{base}}/orders/{{paid.response.body.id}}
+
+### 409 CART_CHECKED_OUT: a new key on the paid cart
+POST {{base}}/carts/{{payCart.response.body.id}}/checkout
+Content-Type: application/json
+Idempotency-Key: pay-2-{{payCart.response.body.id}}
+
+{ "expectedTotalPaise": 69998, "paymentToken": "pm_card_visa" }
+
+### Decline walkthrough: a cart with 1 mouse
+# @name declineCart
+POST {{base}}/carts
+
+###
+PUT {{base}}/carts/{{declineCart.response.body.id}}/items/p_mouse
+Content-Type: application/json
+
+{ "quantity": 1 }
+
+### 409 PRICE_CHANGED: a stale total, with the current breakdown
+POST {{base}}/carts/{{declineCart.response.body.id}}/checkout
+Content-Type: application/json
+Idempotency-Key: stale-1-{{declineCart.response.body.id}}
+
+{ "expectedTotalPaise": 1, "paymentToken": "pm_card_visa" }
+
+### 402 PAYMENT_FAILED: declined. The stock is released and the cart reopens
+POST {{base}}/carts/{{declineCart.response.body.id}}/checkout
+Content-Type: application/json
+Idempotency-Key: decline-1-{{declineCart.response.body.id}}
+
+{ "expectedTotalPaise": 129950, "paymentToken": "pm_card_chargeDeclined" }
+
+### The same key replays the 402
+POST {{base}}/carts/{{declineCart.response.body.id}}/checkout
+Content-Type: application/json
+Idempotency-Key: decline-1-{{declineCart.response.body.id}}
+
+{ "expectedTotalPaise": 129950, "paymentToken": "pm_card_chargeDeclined" }
+
+### A new key pays (201)
+POST {{base}}/carts/{{declineCart.response.body.id}}/checkout
+Content-Type: application/json
+Idempotency-Key: decline-2-{{declineCart.response.body.id}}
+
+{ "expectedTotalPaise": 129950, "paymentToken": "pm_card_visa" }
+
+### 400 IDEMPOTENCY_KEY_INVALID: no key
+POST {{base}}/carts/{{declineCart.response.body.id}}/checkout
+Content-Type: application/json
+
+{ "expectedTotalPaise": 129950, "paymentToken": "pm_card_visa" }
+
+### 404 ORDER_NOT_FOUND
+GET {{base}}/orders/0b8f2d4e-6a1c-4e3b-8d5f-7a9c1e3b5d7f
