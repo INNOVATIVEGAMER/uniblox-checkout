@@ -509,7 +509,7 @@ Config validation refuses to start unless `PAYMENT_PENDING_TTL_SECONDS` is at le
 - `next.config.ts` rewrites `/api/:path*` to `API_URL`. Every page is `'use client'` and fetches through TanStack Query.
 - `web/lib/api.ts` has one `request()` helper and a zod schema for every response body. A response in the error envelope becomes an `ApiError` with `status`, `code`, `message`, `details` and `replayed`. Anything else that fails, such as the proxy's plain-text 500 when the API is down, is a plain `Error` with the raw text. The client never invents an error code.
 - A response panel shows the latest call that changed something (method, path, status, `Idempotency-Key`, `Idempotent-Replayed`, `Retry-After`, raw body) and a one-line list of the last ten calls.
-- Every settled mutation invalidates every query. Queries don't retry, and don't refetch on window focus.
+- Every settled mutation invalidates every query except the coupon preview. The preview refetches when the cart's subtotal changes, when a checkout is rejected, and when the same code is applied again. Queries don't retry, and don't refetch on window focus.
 
 **Why:**
 
@@ -517,6 +517,7 @@ Config validation refuses to start unless `PAYMENT_PENDING_TTL_SECONDS` is at le
 - **Hono RPC** would make `web/` compile against `src/`, which needs a shared package or path mapping, and would skip the boundary parse this repo uses everywhere else.
 - **Server Actions** would move the calls to the server, out of the network tab, which is the opposite of a demo of the API.
 - **Invalidating everything** costs a few GETs per click on five screens. Per-mutation key lists are easy to get wrong: a declined checkout is a 402 that has still released stock and its coupon, so a success-only list would leave the shop stale.
+- **The coupon preview opts out** because a global refresh races checkout's own cart refetch. The preview is refetched for a cart that has just closed, and the API reports its coupon as held or redeemed by the cart's own order. Its refresh points are the three events that can change the discount on an open cart.
 - **No focus refetch** keeps the cart showing the total the customer last saw. That is the total checkout sends as `expectedTotalPaise`, so a price changed from another tab produces `PRICE_CHANGED`, as it would for a real customer.
 - **No retries,** so a 404 or 409 shows at once, and the response panel isn't filled with repeats.
 

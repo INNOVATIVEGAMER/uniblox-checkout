@@ -39,23 +39,23 @@ function CartBody({ cart }: { cart: Cart }) {
   const [couponInput, setCouponInput] = useState('');
   const [appliedCoupon, setAppliedCoupon] = useState<string | null>(null);
   const open = cart.status === 'open';
-  // The subtotal is the only cart input to the discount, so it refetches the preview. A global refresh would race
-  // checkout's own cart refetch and price a cart that just closed, reporting its coupon as taken by its own order.
+  // The subtotal is the only cart input to the discount, so it refetches the preview.
   const preview = useQuery({
     queryKey: ['coupon-preview', cart.id, appliedCoupon, cart.subtotalPaise],
     queryFn: !open || appliedCoupon === null ? skipToken : () => api.getCart(cart.id, appliedCoupon),
     meta: { refreshOnMutation: false },
-  });
-  const editLine = useMutation({
-    mutationFn: ({ productId, quantity }: { productId: string; quantity: number | null }) =>
-      quantity === null ? api.removeItem(cart.id, productId) : api.setQuantity(cart.id, productId, quantity),
   });
 
   const priced = appliedCoupon !== null && preview.data && !preview.isError ? preview.data : cart;
 
   function applyCoupon(event: FormEvent) {
     event.preventDefault();
-    setAppliedCoupon(couponInput.trim());
+    const code = couponInput.trim();
+    if (code === appliedCoupon) {
+      void preview.refetch();
+      return;
+    }
+    setAppliedCoupon(code);
   }
 
   return (
@@ -66,33 +66,7 @@ function CartBody({ cart }: { cart: Cart }) {
       </div>
 
       {!open && <ClosedCartNotice cart={cart} />}
-      {open && editLine.error && <ErrorNotice error={editLine.error} />}
-
-      {cart.lines.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No lines yet. Add a product.</p>
-      ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Product</TableHead>
-              <TableHead className="text-right">Unit</TableHead>
-              <TableHead>Quantity</TableHead>
-              <TableHead className="text-right">Line total</TableHead>
-              <TableHead />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {cart.lines.map((line) => (
-              <CartLineRow
-                key={`${line.productId}:${line.quantity}:${cart.status}`}
-                line={line}
-                disabled={!open || editLine.isPending}
-                onSet={(quantity) => editLine.mutate({ productId: line.productId, quantity })}
-              />
-            ))}
-          </TableBody>
-        </Table>
-      )}
+      <CartLines key={cart.status} cart={cart} />
 
       {open && (
         <>
@@ -127,7 +101,7 @@ function CartBody({ cart }: { cart: Cart }) {
         </>
       )}
 
-      <CheckoutPanel cartId={cart.id} quote={quoteFor(cart, appliedCoupon, preview)} />
+      <CheckoutPanel cartId={cart.id} cartOpen={open} quote={quoteFor(cart, appliedCoupon, preview)} />
     </div>
   );
 }
@@ -141,6 +115,42 @@ function quoteFor(cart: Cart, appliedCoupon: string | null, preview: UseQueryRes
   if (cart.status !== 'open' || appliedCoupon === null || preview.isError) return { expectedTotalPaise: cart.totalPaise };
   if (preview.isFetching || !preview.data?.coupon) return null;
   return { expectedTotalPaise: preview.data.totalPaise, couponCode: preview.data.coupon.code };
+}
+
+function CartLines({ cart }: { cart: Cart }) {
+  const editLine = useMutation({
+    mutationFn: ({ productId, quantity }: { productId: string; quantity: number | null }) =>
+      quantity === null ? api.removeItem(cart.id, productId) : api.setQuantity(cart.id, productId, quantity),
+  });
+
+  if (cart.lines.length === 0) return <p className="text-sm text-muted-foreground">No lines yet. Add a product.</p>;
+
+  return (
+    <>
+      {editLine.error && <ErrorNotice error={editLine.error} />}
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Product</TableHead>
+            <TableHead className="text-right">Unit</TableHead>
+            <TableHead>Quantity</TableHead>
+            <TableHead className="text-right">Line total</TableHead>
+            <TableHead />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {cart.lines.map((line) => (
+            <CartLineRow
+              key={`${line.productId}:${line.quantity}`}
+              line={line}
+              disabled={cart.status !== 'open' || editLine.isPending}
+              onSet={(quantity) => editLine.mutate({ productId: line.productId, quantity })}
+            />
+          ))}
+        </TableBody>
+      </Table>
+    </>
+  );
 }
 
 function ClosedCartNotice({ cart }: { cart: Cart }) {

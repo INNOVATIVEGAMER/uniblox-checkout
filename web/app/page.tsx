@@ -25,7 +25,7 @@ export default function ShopPage() {
 
   return (
     <div className="space-y-6">
-      <ProductList cart={cart.data ?? null} cartId={id} onCartCreated={setCartId} />
+      <ProductList key={id} cart={cart.data ?? null} cartId={id} onCartCreated={setCartId} />
       <CartPanel cartId={id} cart={cart} onNewCart={() => setCartId(null)} />
     </div>
   );

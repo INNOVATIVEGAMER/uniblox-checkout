@@ -1,6 +1,6 @@
 'use client';
 
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useState } from 'react';
 import {
@@ -26,27 +26,30 @@ type Attempt = { cartId: string; key: string; body: CheckoutBody };
  * One attempt is one Idempotency-Key and the exact body it was first sent with. Retry resends both; Change body
  * resends the key with a different total, which the API rejects once the key has a stored outcome.
  */
-export function CheckoutPanel({ cartId, quote }: { cartId: string; quote: Quote | null }) {
+export function CheckoutPanel({ cartId, cartOpen, quote }: { cartId: string; cartOpen: boolean; quote: Quote | null }) {
+  const queryClient = useQueryClient();
   const [paymentToken, setPaymentToken] = useState<PaymentToken>('pm_card_visa');
   const [attempt, setAttempt] = useState<Attempt | null>(null);
   const send = useMutation({
     mutationFn: (requests: Attempt[]) =>
       Promise.allSettled(requests.map(({ cartId, key, body }) => api.checkout(cartId, key, body))),
+    // A rejected checkout leaves the cart open, and may have been rejected over the coupon itself.
+    onSuccess: (results) => {
+      if (results.some((result) => result.status === 'rejected')) {
+        void queryClient.invalidateQueries({ queryKey: ['coupon-preview', cartId] });
+      }
+    },
   });
 
   const canStart = quote !== null && !send.isPending;
   const sent = send.variables?.[0];
 
-  function newAttempt(): Attempt | null {
-    if (quote === null) return null;
-    const next = { cartId, key: crypto.randomUUID(), body: { ...quote, paymentToken } };
-    setAttempt(next);
-    return next;
-  }
-
+  // A closed cart keeps its attempt, so Retry same key can still poll the payment that closed it.
   function pay(times: 1 | 2) {
-    const next = newAttempt();
-    if (next) send.mutate(Array.from({ length: times }, () => next));
+    if (quote === null) return;
+    const next = { cartId, key: crypto.randomUUID(), body: { ...quote, paymentToken } };
+    if (cartOpen) setAttempt(next);
+    send.mutate(Array.from({ length: times }, () => next));
   }
 
   return (

@@ -20,13 +20,13 @@ export function ProductList({
   const products = useQuery({ queryKey: ['products'], queryFn: api.listProducts });
   const addToCart = useMutation({
     mutationFn: async (productId: string) => {
-      let id = cartId;
-      if (id === null) {
-        id = (await api.createCart()).id;
-        onCartCreated(id);
-      }
+      const id = cartId ?? (await api.createCart()).id;
       const inCart = cart?.lines.find((line) => line.productId === productId)?.quantity ?? 0;
       return api.setQuantity(id, productId, inCart + 1);
+    },
+    // The new cart is kept only once it has a line: storing it re-keys this list, which would drop a pending Add.
+    onSuccess: (updated) => {
+      if (cartId === null) onCartCreated(updated.id);
     },
   });
 

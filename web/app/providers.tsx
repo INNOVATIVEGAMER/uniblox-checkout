@@ -3,6 +3,12 @@
 import { MutationCache, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { type ReactNode, useState } from 'react';
 
+declare module '@tanstack/react-query' {
+  interface Register {
+    queryMeta: { refreshOnMutation?: boolean };
+  }
+}
+
 // Every mutation refreshes every query, success or not: a declined checkout has still released stock and its coupon.
 // A query can opt out with `meta.refreshOnMutation: false` when it keys on the data that should refetch it instead.
 // Focus refetch is off so a page keeps showing what the customer last saw, which is what PRICE_CHANGED guards.
