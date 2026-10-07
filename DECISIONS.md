@@ -8,11 +8,21 @@ Sections marked with an issue number are filled in by that issue, together with 
 
 _Consolidated table (I1–I15, where each is enforced, and the test that proves it): #7. Each issue adds the invariants it enforces._
 
+- **I12 (a cart changes only while it is open):** PUT and DELETE lock the cart row `FOR NO KEY UPDATE` and require `status = 'open'`, in the same transaction as the write. That one guard covers `pending_payment` and `checked_out`. The T24 locked-status rows prove it; #3 adds the end-to-end versions.
 - **I10 (money):** totals never go negative, `total = subtotal − discount`, and `discount = floor(subtotal × percent / 100)`. The pure functions are in `src/domain/money.ts`, and T27 proves them. The database CHECKs arrive with orders in #3.
 
 ## Ambiguities and chosen semantics
 
-_Filled in by each issue as it resolves them: carts (#2), checkout (#3), coupons (#4), pending payments (#5)._
+_Filled in by each issue as it resolves them: checkout (#3), coupons (#4), pending payments (#5)._
+
+### Carts
+
+- **"Add" and "change" are one PUT that sets the quantity.** The brief's "add an item" and "change its quantity" both map to `PUT /carts/:id/items/:productId { quantity }`. See the decision below.
+- **The stock check at PUT is soft.** It compares the quantity with the stock at that moment, under no product lock, and reserves nothing. It exists to fail early with a useful 409. Checkout makes the authoritative check under the product lock (#3). The view's `available` flag tells the client when a line has gone short since.
+- **A line holds at most 1000 units, and a cart at most 50 lines.** Both caps bound the money arithmetic (see Money). The quantity cap is in the PUT schema and a CHECK. The line cap is checked in the PUT, under the cart lock. Changing an existing line is never blocked by the line cap.
+- **Prices are live.** Cart lines store no price. Each view reads the current price, and the order snapshots it once, at checkout.
+- **Carts have no `updated_at`.** The architecture lists one, but nothing reads it, and a column with that name that never changed would mislead. Carts keep `created_at`.
+- **The view's `orderId` and `coupon`, and `details: { orderId }` on the two locked-status errors, are not there yet.** No orders or coupons table exists. #3 adds `orderId`, and #4 adds `coupon` with the preview.
 
 ## Material decisions
 
@@ -75,6 +85,36 @@ For HTTP, Express and Fastify were the alternatives to Hono. For validation, the
 
 **Consequences:** `server.ts` and the test helper are the only places that assemble the graph.
 
+### Decision: PUT sets the quantity, and DELETE is idempotent
+
+**Context:** A client that times out on "add to cart" retries. The brief grades the service on repeated requests, and only checkout is meant to carry an idempotency key.
+
+**Options considered:**
+
+- `POST /carts/:id/items { productId, quantity }` that adds to the quantity, with an idempotency key on every cart write.
+- `PUT /carts/:id/items/:productId { quantity }` that sets the quantity, and a `DELETE` that returns 404 for an absent line.
+- The same PUT, and a `DELETE` that returns 200 for an absent line.
+- For telling an add from a change: `INSERT … ON CONFLICT DO UPDATE` with `RETURNING (xmax = 0)`, or a plain SELECT under the cart lock followed by an INSERT or an UPDATE.
+
+**Choice:**
+
+- PUT sets the quantity: 201 when it adds the line, 200 when it changes it.
+- DELETE of an absent line returns 200 with the cart.
+- Both run in one READ COMMITTED transaction that first locks the cart row `FOR NO KEY UPDATE` and checks that the cart is open. PUT then reads the product (404, soft stock check), looks for the line, counts the lines if it is new (422 `CART_LINE_LIMIT`), and inserts or updates. The view is built in the same transaction.
+
+**Why:**
+
+- "Add 1 keyboard" sent twice gives 2 keyboards. "Set the keyboard quantity to 1" sent twice still gives 1. Every cart write is retry-safe without a key, and a retried DELETE gets the answer the first one got.
+- The cart lock serialises every write to that cart's lines. So the existence check, the line count and the INSERT can't interleave with another request on the same cart: five identical PUTs give one 201 and four 200s (T8), and two new lines racing for the 50th slot give one 201 and one 422.
+- `FOR NO KEY UPDATE` is enough, because only non-key columns change. It doesn't block the `FOR KEY SHARE` lock that a `cart_items` insert takes on its product row, so carts holding the same product never wait on each other.
+- `xmax = 0` relies on a system column that Postgres doesn't document for this use, and the line cap would still need a count under a lock.
+- At READ COMMITTED, each statement takes a fresh snapshot. A PUT that waited for the cart lock therefore sees the line that the previous holder inserted.
+
+**Consequences:**
+
+- A client can't add "one more" without knowing the current quantity. It reads the cart first.
+- The 201 or 200 tells the client which case happened, but the body is the same cart view either way.
+
 _Further decisions arrive with the issues that make them:_
 
 - Row locks, lock order and READ COMMITTED: #3.
@@ -82,7 +122,6 @@ _Further decisions arrive with the issues that make them:_
 - Atomic phases instead of an outbox: #3.
 - The fake gateway: #3.
 - The required price guard: #3.
-- PUT set-quantity: #2.
 - Coupon generation and the advisory lock: #4.
 - Holding unknown payment outcomes: #5.
 - The report snapshot: #6.
@@ -120,7 +159,7 @@ For rounding, the options were round-half-up, banker's rounding, and floor.
 **Why:**
 
 - **Integer arithmetic on safe integers is exact.** `Math.floor(n / 100)` is exact for any integer `n` below 2^53: IEEE division is correctly rounded, and `n / 100` is never within 0.01 of the next integer, while the rounding error is far below that.
-- **The bounds keep every intermediate value safe.** A unit price is capped at 1,000,000,000 paise (₹1 crore, enforced by the PATCH schema), a line quantity at 1000, and a cart at 50 lines (`MAX_CART_LINES`, which the cart PUT in #2 enforces with 422 `CART_LINE_LIMIT`). So a full cart's `subtotal × 100` is at most 5 × 10^15, below 2^53 ≈ 9 × 10^15. Without the line cap, about 90 lines at the caps would pass 2^53. T27 includes a full cart at the caps.
+- **The bounds keep every intermediate value safe.** A unit price is capped at 1,000,000,000 paise (₹1 crore, enforced by the PATCH schema), a line quantity at 1000, and a cart at 50 lines (`MAX_CART_LINES`, which the cart PUT enforces with 422 `CART_LINE_LIMIT`). So a full cart's `subtotal × 100` is at most 5 × 10^15, below 2^53 ≈ 9 × 10^15. Without the line cap, about 90 lines at the caps would pass 2^53. T27 includes a full cart at the caps.
 - **Floor is deterministic and can't overshoot.** It favours the store by under one paisa. With `percentOff ≤ 100`, the discount never exceeds the subtotal, so the total is never negative.
 - **The seed exposes a rounding slip.** The cable costs 34999 paise, so 10% off gives 3499 with floor and 3500 with `Math.round`. A rounding slip fails T27.
 
@@ -186,6 +225,12 @@ Each test that guards an enforcement was run once with that enforcement removed,
 | `strictObject` on the PATCH body (plain `object`)                | T25 row "unknown field beside a valid one"                    |
 | `lock_timeout` on the pool                                       | "returns 503 LOCK_TIMEOUT …" (the PATCH waits instead)        |
 | `Math.floor` in `discount` (replaced with `Math.round`)          | T27 "floors the discount: the cable at 34999 …"               |
+| The cart lock (`FOR NO KEY UPDATE`) in PUT and DELETE            | T8 gets `{201:1, 500:4}`: all five see no line, then four inserts hit the primary key (23505). The concurrent line-cap test gets `{201:2}` and 51 lines |
+| The line count moved before the cart lock                        | The concurrent line-cap test gets `{201:2}`. T8 still passes, so the count needs its own test |
+| The line-cap check                                               | T24 "allows the 50th line, rejects the next new line …" (201 instead of 422), and the concurrent line-cap test |
+| The status guard in PUT and DELETE                               | All eight T24 locked-status rows                              |
+
+On the barrier: with the cart lock present, every PUT blocks on `SELECT … FROM carts … FOR NO KEY UPDATE`. With it removed, every PUT blocks on the `INSERT INTO cart_items`, whose foreign-key check needs `FOR KEY SHARE` on the cart row that the barrier holds `FOR UPDATE`. So the barrier still lines the requests up, and they fail at the INSERT.
 
 ## Time spent
 
