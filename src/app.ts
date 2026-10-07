@@ -13,7 +13,7 @@ import { productsRoutes } from './modules/products/routes';
 export function createApp({ config, gateway, db }: { config: Config; gateway: PaymentGateway; db: Db }) {
   return new Hono()
     .route('/', productsRoutes({ db }))
-    .route('/', cartsRoutes({ db }))
+    .route('/', cartsRoutes({ db, gateway, config }))
     .route('/', checkoutRoutes({ db, gateway, config }))
     .route('/', ordersRoutes({ db }))
     .route('/', couponsRoutes({ db, config }))

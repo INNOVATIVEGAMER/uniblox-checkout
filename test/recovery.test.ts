@@ -198,11 +198,16 @@ describe('T31 recovery with stub gateways', () => {
   const stub = (methods: Partial<PaymentGateway>): PaymentGateway => ({ charge: fail, retrieve: fail, cancel: fail, ...methods });
   const notFound: PaymentGateway['retrieve'] = () => Promise.resolve({ outcome: 'not_found' });
 
-  async function staleLampOrder() {
+  async function crashedLampOrder() {
     const { coupon, cartId, total } = await lampWithCoupon();
     const { order } = await crashAfterReserve({ cartId, ...visa(total), couponCode: coupon.code });
-    await backdate(db, order.id);
     return { coupon, cartId, order };
+  }
+
+  async function staleLampOrder() {
+    const crashed = await crashedLampOrder();
+    await backdate(db, crashed.order.id);
+    return crashed;
   }
 
   it('a charge that lands between retrieve and cancel makes the order paid and redeems the coupon', async () => {
@@ -239,8 +244,11 @@ describe('T31 recovery with stub gateways', () => {
 
   it('one failing order does not abort reconcile: the next one resolves, and stillPending counts the failure', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const first = await staleLampOrder();
-    const second = await staleLampOrder();
+    // Both carts are built before either order goes stale, or the second cart's PUT would recover the first.
+    const first = await crashedLampOrder();
+    const second = await crashedLampOrder();
+    await backdate(db, first.order.id);
+    await backdate(db, second.order.id);
     const gateway = stub({
       retrieve: (orderId) => (orderId === first.order.id ? fail() : Promise.resolve({ outcome: 'approved', paymentRef: 'ch_ok' })),
     });
@@ -249,5 +257,114 @@ describe('T31 recovery with stub gateways', () => {
     expect(await resolutionRow(db, first.order.id)).toMatchObject({ status: 'pending_payment' });
     expect(error).toHaveBeenCalledOnce();
     expect(error).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ orderId: first.order.id }));
+  });
+});
+
+describe('T15 recovery triggers, on the 200 ms app', () => {
+  const short = createTestApp({ LOCK_TIMEOUT_MS: '200' });
+  const shortApp = short.appWith(new FakeGateway());
+  const requests = cartRequests(shortApp);
+  afterAll(() => short.pool.end());
+
+  type Fixture = { cartA: string; cartB: string; couponCode: string };
+  type Trigger = {
+    label: string;
+    cartB: Record<string, number>;
+    send: (f: Fixture) => Promise<Response>;
+    resolvedStatus: number;
+    blocked: [number, 'CART_PAYMENT_PENDING' | 'COUPON_RESERVED' | 'INSUFFICIENT_STOCK'];
+  };
+
+  // Each row matches order A through one clause only, except checkout on cart A, whose lines are the order's lines.
+  const triggers: Trigger[] = [
+    {
+      label: 'checkout on the cart',
+      cartB: {},
+      send: ({ cartA }) => postCheckout(shortApp, cartA, newKey(), visa(3 * priceOf('p_lamp'))),
+      resolvedStatus: 201,
+      blocked: [409, 'CART_PAYMENT_PENDING'],
+    },
+    {
+      label: 'checkout by another cart using the held coupon',
+      cartB: { p_mouse: 1 },
+      send: ({ cartB, couponCode }) => postCheckout(shortApp, cartB, newKey(), { ...visa(withTenPercent(priceOf('p_mouse'))), couponCode }),
+      resolvedStatus: 201,
+      blocked: [409, 'COUPON_RESERVED'],
+    },
+    {
+      label: 'checkout by another cart wanting the held lamps',
+      cartB: { p_lamp: 1 },
+      send: ({ cartB }) => postCheckout(shortApp, cartB, newKey(), visa(priceOf('p_lamp'))),
+      resolvedStatus: 201,
+      blocked: [409, 'INSUFFICIENT_STOCK'],
+    },
+    {
+      label: 'a PUT of the held product on another cart',
+      cartB: {},
+      send: ({ cartB }) => requests.putItem(cartB, 'p_lamp', 1),
+      resolvedStatus: 201,
+      blocked: [409, 'INSUFFICIENT_STOCK'],
+    },
+    {
+      label: 'a PUT of another product on the cart',
+      cartB: {},
+      send: ({ cartA }) => requests.putItem(cartA, 'p_mouse', 1),
+      resolvedStatus: 201,
+      blocked: [409, 'CART_PAYMENT_PENDING'],
+    },
+    {
+      label: 'a DELETE on the cart',
+      cartB: {},
+      send: ({ cartA }) => requests.deleteItem(cartA, 'p_lamp'),
+      resolvedStatus: 200,
+      blocked: [409, 'CART_PAYMENT_PENDING'],
+    },
+  ];
+
+  /** Cart A holds every lamp and the coupon in a tok_timeout_declined order. Cart B is built first, while lamps are in stock. */
+  async function holdEverything(trigger: Trigger) {
+    muteUnknownOutcomes();
+    const coupon = await insertCoupon(db);
+    const cartB = await requests.cartWith(trigger.cartB);
+    const cartA = await requests.cartWith({ p_lamp: 3 });
+    const body = { expectedTotalPaise: withTenPercent(3 * priceOf('p_lamp')), paymentToken: 'tok_timeout_declined', couponCode: coupon.code };
+    const order = await expectOrder(await postCheckout(shortApp, cartA, newKey(), body), 202);
+    return { fixture: { cartA, cartB, couponCode: coupon.code }, orderId: order.id };
+  }
+
+  it.each(triggers)('$label resolves a stale order first, then proceeds', async (trigger) => {
+    const { fixture, orderId } = await holdEverything(trigger);
+    await backdate(db, orderId);
+    const error = vi.spyOn(console, 'error');
+
+    expect((await shortApp.request(`/carts/${fixture.cartA}`)).status).toBe(200);
+    expect((await shortApp.request(`/orders/${orderId}`)).status).toBe(200);
+    expect((await resolutionRow(db, orderId))?.status).toBe('pending_payment');
+
+    const res = await trigger.send(fixture);
+    expect(res.status).toBe(trigger.resolvedStatus);
+    expect(await resolutionRow(db, orderId)).toMatchObject({ status: 'failed', failureReason: 'card_declined' });
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it.each(triggers)('$label is blocked by a fresh pending order', async (trigger) => {
+    const { fixture, orderId } = await holdEverything(trigger);
+    const [status, code] = trigger.blocked;
+
+    await expectError(await trigger.send(fixture), status, code);
+    expect((await resolutionRow(db, orderId))?.status).toBe('pending_payment');
+  });
+
+  it('a gateway failure during recovery is logged, and the request carries on to its own answer', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const cartB = await requests.newCart();
+    const { order } = await crashAfterReserve({ cartId: await requests.cartWith({ p_lamp: 3 }), ...visa(3 * priceOf('p_lamp')) });
+    await backdate(db, order.id);
+
+    const res = await cartRequests(short.appWith(throwingGateway)).putItem(cartB, 'p_lamp', 1);
+
+    await expectError(res, 409, 'INSUFFICIENT_STOCK');
+    expect((await resolutionRow(db, order.id))?.status).toBe('pending_payment');
+    expect(error).toHaveBeenCalledOnce();
   });
 });

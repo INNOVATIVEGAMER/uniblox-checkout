@@ -18,10 +18,13 @@ export type StaleScope =
   | { scope: 'all' }
   | { scope: 'request'; cartId: string; couponCode?: string; productIds: string[] };
 
-function scopeFilter(s: StaleScope) {
+function scopeFilter(db: Db, s: StaleScope) {
   if (s.scope === 'all') return undefined;
   const holdsProduct = exists(
-    sql`SELECT 1 FROM ${orderItems} WHERE ${and(eq(orderItems.orderId, orders.id), inArray(orderItems.productId, s.productIds))}`,
+    db
+      .select({ one: sql`1` })
+      .from(orderItems)
+      .where(and(eq(orderItems.orderId, orders.id), inArray(orderItems.productId, s.productIds))),
   );
   const holdsCoupon = s.couponCode === undefined ? undefined : eq(coupons.code, s.couponCode);
   return or(eq(orders.cartId, s.cartId), holdsCoupon, holdsProduct);
@@ -37,7 +40,7 @@ export function findStalePending(db: Db, ttlSeconds: number, s: StaleScope): Pro
       and(
         eq(orders.status, 'pending_payment'),
         lt(orders.createdAt, sql`now() - make_interval(secs => ${ttlSeconds})`),
-        scopeFilter(s),
+        scopeFilter(db, s),
       ),
     )
     .orderBy(asc(orders.createdAt));
