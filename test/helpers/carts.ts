@@ -1,13 +1,13 @@
 import { expect } from 'vitest';
 import { z } from 'zod';
 import type { Db } from '../../src/db/client';
-import { cartItems, products } from '../../src/db/schema';
+import { CART_STATUSES, cartItems, products } from '../../src/db/schema';
 import { MAX_CART_LINES } from '../../src/domain/money';
 import { type TestApp, sendJson } from './app';
 
 export const cartViewSchema = z.strictObject({
   id: z.uuid(),
-  status: z.enum(['open', 'pending_payment', 'checked_out']),
+  status: z.enum(CART_STATUSES),
   lines: z.array(
     z.strictObject({
       productId: z.string(),

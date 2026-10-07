@@ -94,18 +94,18 @@ For HTTP, Express and Fastify were the alternatives to Hono. For validation, the
 - `POST /carts/:id/items { productId, quantity }` that adds to the quantity, with an idempotency key on every cart write.
 - `PUT /carts/:id/items/:productId { quantity }` that sets the quantity, and a `DELETE` that returns 404 for an absent line.
 - The same PUT, and a `DELETE` that returns 200 for an absent line.
-- For telling an add from a change: `INSERT … ON CONFLICT DO UPDATE` with `RETURNING (xmax = 0)`, or a plain SELECT under the cart lock followed by an INSERT or an UPDATE.
+- For telling an add from a change: `INSERT … ON CONFLICT DO UPDATE` with `RETURNING (xmax = 0)`, or, under the cart lock, an `UPDATE … RETURNING` followed by an INSERT when it matched no row.
 
 **Choice:**
 
 - PUT sets the quantity: 201 when it adds the line, 200 when it changes it.
 - DELETE of an absent line returns 200 with the cart.
-- Both run in one READ COMMITTED transaction that first locks the cart row `FOR NO KEY UPDATE` and checks that the cart is open. PUT then reads the product (404, soft stock check), looks for the line, counts the lines if it is new (422 `CART_LINE_LIMIT`), and inserts or updates. The view is built in the same transaction.
+- Both run in one READ COMMITTED transaction that first locks the cart row `FOR NO KEY UPDATE` and checks that the cart is open. PUT then reads the product (404, soft stock check) and updates the line. If the update matched no row, it counts the lines (422 `CART_LINE_LIMIT`) and inserts. The view is built in the same transaction.
 
 **Why:**
 
 - "Add 1 keyboard" sent twice gives 2 keyboards. "Set the keyboard quantity to 1" sent twice still gives 1. Every cart write is retry-safe without a key, and a retried DELETE gets the answer the first one got.
-- The cart lock serialises every write to that cart's lines. So the existence check, the line count and the INSERT can't interleave with another request on the same cart: five identical PUTs give one 201 and four 200s (T8), and two new lines racing for the 50th slot give one 201 and one 422.
+- The cart lock serialises every write to that cart's lines. So the UPDATE, the line count and the INSERT can't interleave with another request on the same cart: five identical PUTs give one 201 and four 200s (T8), and two new lines racing for the 50th slot give one 201 and one 422.
 - `FOR NO KEY UPDATE` is enough, because only non-key columns change. It doesn't block the `FOR KEY SHARE` lock that a `cart_items` insert takes on its product row, so carts holding the same product never wait on each other.
 - `xmax = 0` relies on a system column that Postgres doesn't document for this use, and the line cap would still need a count under a lock.
 - At READ COMMITTED, each statement takes a fresh snapshot. A PUT that waited for the cart lock therefore sees the line that the previous holder inserted.
@@ -225,7 +225,7 @@ Each test that guards an enforcement was run once with that enforcement removed,
 | `strictObject` on the PATCH body (plain `object`)                | T25 row "unknown field beside a valid one"                    |
 | `lock_timeout` on the pool                                       | "returns 503 LOCK_TIMEOUT …" (the PATCH waits instead)        |
 | `Math.floor` in `discount` (replaced with `Math.round`)          | T27 "floors the discount: the cable at 34999 …"               |
-| The cart lock (`FOR NO KEY UPDATE`) in PUT and DELETE            | T8 gets `{201:1, 500:4}`: all five see no line, then four inserts hit the primary key (23505). The concurrent line-cap test gets `{201:2}` and 51 lines |
+| The cart lock (`FOR NO KEY UPDATE`) in PUT and DELETE            | T8 gets `{201:1, 500:4}`: all five update no row, then four inserts hit the primary key (23505). The concurrent line-cap test gets `{201:2}` and 51 lines |
 | The line count moved before the cart lock                        | The concurrent line-cap test gets `{201:2}`. T8 still passes, so the count needs its own test |
 | The line-cap check                                               | T24 "allows the 50th line, rejects the next new line …" (201 instead of 422), and the concurrent line-cap test |
 | The status guard in PUT and DELETE                               | All eight T24 locked-status rows                              |

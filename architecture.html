@@ -335,7 +335,7 @@ idempotency_keys
 
 <div class="card">
 <strong>Why PUT to set a quantity, and an idempotent DELETE</strong> <span class="tag user">Product</span>
-<p>"Add 1 keyboard" sent twice because of a timeout produces 2 keyboards. "Set the keyboard quantity to 1" sent twice still produces 1. A DELETE of a line that is already gone returns 200 with the cart, for the same reason. Every cart mutation is retry-safe, so only checkout needs an explicit key. The README maps the brief's "add" and "change" to PUT. The 201/200 split comes from a plain SELECT, made while the cart lock is held, followed by an INSERT or an UPDATE.</p>
+<p>"Add 1 keyboard" sent twice because of a timeout produces 2 keyboards. "Set the keyboard quantity to 1" sent twice still produces 1. A DELETE of a line that is already gone returns 200 with the cart, for the same reason. Every cart mutation is retry-safe, so only checkout needs an explicit key. The README maps the brief's "add" and "change" to PUT. The 201/200 split comes from an <code>UPDATE … RETURNING</code>, made while the cart lock is held, followed by an INSERT when it matched no row.</p>
 </div>
 
 <h2 id="checkout">The checkout flow</h2>
@@ -719,7 +719,7 @@ new AppError('CART_NOT_FOUND', details?)    // status and final come from ERRORS
     money.ts              pure: lineTotal, discount, total
     milestones.ts         pure: eligibility math
   modules/
-    products/routes.ts    GET /products, PATCH /admin/products/:id (queries inline)
+    products/             routes.ts (GET /products, PATCH /admin/products/:id, queries inline), id.ts (productIdSchema)
     carts/                routes.ts, service.ts (mutations, view, coupon preview)
     checkout/             routes.ts, service.ts (phases 0–3, reservePhase), idempotency.ts (claimKey, completeKeyWithError, replay)
     payments/             gateway.ts, fake-gateway.ts, finalize.ts (finalizeOrder), recovery.ts (findStalePending,

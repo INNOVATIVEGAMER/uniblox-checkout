@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { Db } from '../../db/client';
 import { MAX_LINE_QUANTITY } from '../../domain/money';
 import { validate } from '../../errors';
-import { productIdSchema } from '../products/routes';
+import { productIdSchema } from '../products/id';
 import { createCart, loadCartView, removeItem, setItemQuantity } from './service';
 
 const cartParamsSchema = z.object({ id: z.uuid() });

@@ -1,4 +1,4 @@
-import { and, asc, count, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import type { Db, Tx } from '../../db/client';
 import { cartItems, carts, products } from '../../db/schema';
 import { MAX_CART_LINES, lineTotal, total } from '../../domain/money';
@@ -8,7 +8,7 @@ type Cart = Pick<typeof carts.$inferSelect, 'id' | 'status'>;
 
 const cartColumns = { id: carts.id, status: carts.status };
 
-export async function toCartView(db: Db | Tx, cart: Cart) {
+async function toCartView(db: Db | Tx, cart: Cart) {
   const rows = await db
     .select({
       productId: cartItems.productId,
@@ -62,15 +62,15 @@ export function setItemQuantity(db: Db, cartId: string, productId: string, quant
         throw new AppError('INSUFFICIENT_STOCK', [{ productId, requested: quantity, available: product.stock }]);
       }
 
-      const line = and(eq(cartItems.cartId, cartId), eq(cartItems.productId, productId));
-      const [existing] = await tx.select({ quantity: cartItems.quantity }).from(cartItems).where(line);
-      if (existing) {
-        await tx.update(cartItems).set({ quantity }).where(line);
-        return { created: false, view: await toCartView(tx, cart) };
-      }
+      const updated = await tx
+        .update(cartItems)
+        .set({ quantity })
+        .where(and(eq(cartItems.cartId, cartId), eq(cartItems.productId, productId)))
+        .returning({ productId: cartItems.productId });
+      if (updated.length > 0) return { created: false, view: await toCartView(tx, cart) };
 
-      const [lines] = await tx.select({ n: count() }).from(cartItems).where(eq(cartItems.cartId, cartId));
-      if (lines && lines.n >= MAX_CART_LINES) throw new AppError('CART_LINE_LIMIT', { maxLines: MAX_CART_LINES });
+      const lineCount = await tx.$count(cartItems, eq(cartItems.cartId, cartId));
+      if (lineCount >= MAX_CART_LINES) throw new AppError('CART_LINE_LIMIT', { maxLines: MAX_CART_LINES });
 
       await tx.insert(cartItems).values({ cartId, productId, quantity });
       return { created: true, view: await toCartView(tx, cart) };

@@ -26,7 +26,7 @@ async function connect(): Promise<{ client: Client; pid: number }> {
     const [{ pid }] = pidRowsSchema.parse((await client.query('SELECT pg_backend_pid() AS pid')).rows);
     return { client, pid };
   } catch (err) {
-    await client.end();
+    await Promise.allSettled([client.end()]);
     throw err;
   }
 }
@@ -55,7 +55,7 @@ export async function holdLock(target: LockTarget): Promise<HeldLock> {
     }
     return { pid, release };
   } catch (err) {
-    await release();
+    await Promise.allSettled([release()]);
     throw err;
   }
 }
@@ -80,15 +80,17 @@ async function untilLockWaiters(waiters: number, lockPid: number, requests: Prom
         [[lockPid, poller.pid]],
       );
       const [{ n }] = countRowsSchema.parse(result.rows);
-      if (n >= waiters) return;
+      if (n >= waiters) break;
       if (Date.now() > deadline) {
         throw new BarrierTimeout(`${n} of ${waiters} requests were waiting on a lock after ${BARRIER_DEADLINE_MS} ms`);
       }
       await sleep(POLL_INTERVAL_MS);
     }
-  } finally {
-    await poller.client.end();
+  } catch (err) {
+    await Promise.allSettled([poller.client.end()]);
+    throw err;
   }
+  await poller.client.end();
 }
 
 /**
@@ -102,10 +104,11 @@ export async function barrier<T>(target: LockTarget, waiters: number, fire: () =
     requests = fire();
     await untilLockWaiters(waiters, lock.pid, requests);
   } catch (err) {
-    await lock.release();
-    await Promise.allSettled(requests);
+    await Promise.allSettled([lock.release(), ...requests]);
     throw err;
   }
-  await lock.release();
+  const released = lock.release();
+  await Promise.allSettled([released, ...requests]);
+  await released;
   return Promise.all(requests);
 }

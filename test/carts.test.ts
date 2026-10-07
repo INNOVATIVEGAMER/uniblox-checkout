@@ -3,6 +3,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { cartItems, carts, products } from '../src/db/schema';
 import { MAX_CART_LINES } from '../src/domain/money';
+import type { ErrorCode } from '../src/errors';
 import { createTestApp, sendJson } from './helpers/app';
 import { bulkId, cartRequests, cartViewSchema, fillCart } from './helpers/carts';
 import { resetDb, snapshotDb } from './helpers/db';
@@ -23,7 +24,7 @@ async function expectView(res: Response, status: number) {
   return cartViewSchema.parse(await res.json());
 }
 
-async function expectError(res: Response, status: number, code: string) {
+async function expectError(res: Response, status: number, code: ErrorCode) {
   expect(res.status).toBe(status);
   const { error } = errorBodySchema.parse(await res.json());
   expect(error.code).toBe(code);
@@ -189,7 +190,7 @@ describe('T24 line cap', () => {
   it.each([
     ['a product above its stock', 'p_lamp', 4, 409, 'INSUFFICIENT_STOCK'],
     ['an unknown product', 'p_nope', 1, 404, 'PRODUCT_NOT_FOUND'],
-  ])('on a full cart, a new line with %s gets %i %s, not the line cap', async (_label, productId, quantity, status, code) => {
+  ] as const)('on a full cart, a new line with %s gets %i %s, not the line cap', async (_label, productId, quantity, status, code) => {
     const cartId = await cartWithBulkLines(MAX_CART_LINES);
     await expectError(await putItem(cartId, productId, quantity), status, code);
   });
