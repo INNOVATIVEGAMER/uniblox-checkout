@@ -269,7 +269,7 @@ describe('T31 recovery with stub gateways', () => {
     });
 
     expect(await reconcile({ db, gateway, config })).toEqual({ resolved: [{ orderId: second.order.id, status: 'paid' }], stillPending: 1 });
-    expect(await resolutionRow(db, first.order.id)).toMatchObject({ status: 'pending_payment' });
+    expect(await orderStatus(db, first.order.id)).toBe('pending_payment');
     expect(error).toHaveBeenCalledOnce();
     expect(error).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ orderId: first.order.id }));
   });

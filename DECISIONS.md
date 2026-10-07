@@ -261,7 +261,7 @@ For HTTP, Express and Fastify were the alternatives to Hono. For validation, the
 - A transactional outbox and a worker that charges and finalizes.
 - A workflow engine (Temporal, a saga orchestrator).
 
-**Choice:** one synchronous request in three phases. Reserve commits a `pending_payment` order holding its stock. The charge runs with no transaction open, under `AbortSignal.timeout(GATEWAY_TIMEOUT_MS)`. Then `finalizeOrder(orderId, resolution)` marks the order paid (the cart becomes `checked_out`) or failed (the stock is restored on top of the current value, and the cart reopens). Any thrown error from the charge is an unknown outcome: nothing is written, and the response is 202. The response is always built from the order as it is after finalize, by `toCheckoutResponse(loadOrderView(…))`.
+**Choice:** one synchronous request in three phases. Reserve commits a `pending_payment` order holding its stock. The charge runs with no transaction open, under `AbortSignal.timeout(GATEWAY_TIMEOUT_MS)`. Then `finalizeOrder(db, orderId, resolution)` marks the order paid (the cart becomes `checked_out`) or failed (the stock is restored on top of the current value, and the cart reopens). Any thrown error from the charge is an unknown outcome: nothing is written, and the response is 202. The response is always built from the order as it is after finalize, by `toCheckoutResponse(loadOrderView(…))`.
 
 **Why:**
 

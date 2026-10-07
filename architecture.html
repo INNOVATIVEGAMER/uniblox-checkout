@@ -400,7 +400,7 @@ if (outcome.kind === 'rejected') throw outcome.error;   // after COMMIT</code></
 
 <div class="phase">Phase 3: finalize (transaction 2)</div>
 <ol class="steps">
-  <li data-n="10"><strong>Approved or declined:</strong> <code>finalizeOrder(orderId, resolution)</code>, the same function recovery uses:
+  <li data-n="10"><strong>Approved or declined:</strong> <code>finalizeOrder(db, orderId, resolution)</code>, the same function recovery uses:
     <div class="fail">Read the order's <code>cart_id</code>, which never changes. Lock the cart. Then claim the order with <code>UPDATE orders SET status = … WHERE id = $1 AND status = 'pending_payment'</code>. If no row changed, something else already resolved it, so stop.<br>
     <strong>Approved:</strong> order <code>paid</code>, coupon <code>redeemed</code>, cart <code>checked_out</code>.<br>
     <strong>Declined:</strong> order <code>failed</code>. Lock the products in ID order, then add the quantities back. Coupon <code>available</code>, cart <code>open</code>.<br>
@@ -438,14 +438,14 @@ if (outcome.kind === 'rejected') throw outcome.error;   // after COMMIT</code></
 <p><code>lock_timeout</code> is set on the pool (<code>new Pool({ lock_timeout })</code>, from <code>LOCK_TIMEOUT_MS</code>, default 5 seconds). It covers every lock wait, including the claim and the advisory lock. A timeout becomes 503 LOCK_TIMEOUT.</p>
 
 <h2 id="recovery">Pending recovery</h2>
-<p>A pending order can come from an unknown outcome (a 202), from a crash between reserve and finalize, or from a phase 3 failure. In each case it holds stock and maybe a coupon. Once it is older than <code>PAYMENT_PENDING_TTL_SECONDS</code> (compared with <code>now()</code> in SQL against <code>orders.created_at</code>), <code>resolvePendingOrder(orderId)</code> can resolve it:</p>
+<p>A pending order can come from an unknown outcome (a 202), from a crash between reserve and finalize, or from a phase 3 failure. In each case it holds stock and maybe a coupon. Once it is older than <code>PAYMENT_PENDING_TTL_SECONDS</code> (compared with <code>now()</code> in SQL against <code>orders.created_at</code>), <code>resolvePendingOrder(deps, order)</code> can resolve it:</p>
 <ol class="steps">
   <li data-n="1"><strong>Zero total:</strong> the order was never going to be charged, so resolve it as <em>approved</em> without calling the gateway.</li>
-  <li data-n="2"><strong>Otherwise, ask the gateway:</strong> <code>gateway.retrieve(orderId)</code>, outside any transaction. Each gateway call here is bounded by <code>GATEWAY_TIMEOUT_MS</code>, and a timeout leaves the order pending.
+  <li data-n="2"><strong>Otherwise, ask the gateway:</strong> <code>gateway.retrieve(orderId, signal)</code>, outside any transaction. Each gateway call here is bounded by <code>GATEWAY_TIMEOUT_MS</code>, and a timeout leaves the order pending.
     <div class="fail"><strong>Approved or declined:</strong> that is the resolution.<br>
-    <strong>Not found:</strong> call <code>gateway.cancel(orderId)</code>. It returns <em>cancelled</em>, and from then on any late <code>charge()</code> for this order is declined. Or, if the charge landed in between, it returns that charge's result. Cancelled resolves as <em>declined</em>, with reason <code>abandoned</code>.<br>
+    <strong>Not found:</strong> call <code>gateway.cancel(orderId, signal)</code>. It returns <em>cancelled</em>, and from then on any late <code>charge()</code> for this order is declined. Or, if the charge landed in between, it returns that charge's result. Cancelled resolves as <em>declined</em>, with reason <code>abandoned</code>.<br>
     <strong>The gateway throws:</strong> leave the order pending and try again later.</div></li>
-  <li data-n="3"><code>finalizeOrder(orderId, resolution)</code>. Its conditional update makes every race safe: recovery against the original phase 3, and two recoveries at once, both change the order exactly once (I13).</li>
+  <li data-n="3"><code>finalizeOrder(db, orderId, resolution)</code>. Its conditional update makes every race safe: recovery against the original phase 3, and two recoveries at once, both change the order exactly once (I13).</li>
 </ol>
 <div class="table-wrap"><table>
 <tr><th>Triggered by</th><th>Which stale orders</th><th>When</th></tr>
