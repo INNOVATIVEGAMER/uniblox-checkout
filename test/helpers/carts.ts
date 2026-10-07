@@ -8,6 +8,7 @@ import { type TestApp, sendJson } from './app';
 export const cartViewSchema = z.strictObject({
   id: z.uuid(),
   status: z.enum(CART_STATUSES),
+  orderId: z.uuid().nullable(),
   lines: z.array(
     z.strictObject({
       productId: z.string(),

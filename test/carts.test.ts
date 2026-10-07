@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { cartItems, carts, products } from '../src/db/schema';
+import { cartItems, carts, orders, products } from '../src/db/schema';
 import { MAX_CART_LINES } from '../src/domain/money';
 import type { ErrorCode } from '../src/errors';
 import { createTestApp, sendJson } from './helpers/app';
@@ -44,6 +44,7 @@ describe('cart lifecycle', () => {
     expect(created).toEqual({
       id: expect.any(String),
       status: 'open',
+      orderId: null,
       lines: [],
       subtotalPaise: 0,
       discountPaise: 0,
@@ -92,6 +93,7 @@ describe('T24 cart view', () => {
     expect(await getCart(cartId)).toEqual({
       id: cartId,
       status: 'open',
+      orderId: null,
       lines: [
         {
           productId: 'p_cable',
@@ -197,15 +199,21 @@ describe('T24 line cap', () => {
 });
 
 describe.each([
-  ['pending_payment', 'CART_PAYMENT_PENDING'],
-  ['checked_out', 'CART_CHECKED_OUT'],
-] as const)('T24 a %s cart (status set in SQL)', (status, code) => {
+  ['pending_payment', 'CART_PAYMENT_PENDING', { status: 'pending_payment' }],
+  ['checked_out', 'CART_CHECKED_OUT', { status: 'paid', paymentRef: 'ch_sql', resolvedAt: new Date() }],
+] as const)('T24 a %s cart (status set in SQL)', (status, code, order) => {
   let cartId: string;
+  let orderId: string;
 
   beforeEach(async () => {
     cartId = await newCart();
     await putItem(cartId, 'p_lamp', 1);
     await db.update(carts).set({ status }).where(eq(carts.id, cartId));
+    const [inserted] = await db
+      .insert(orders)
+      .values({ cartId, subtotalPaise: 0, discountPaise: 0, totalPaise: 0, ...order })
+      .returning({ id: orders.id });
+    orderId = z.uuid().parse(inserted?.id);
   });
 
   it.each([
@@ -215,13 +223,15 @@ describe.each([
     ['DELETE of an absent line', () => deleteItem(cartId, 'p_mouse')],
   ])(`rejects %s with 409 ${code} and changes nothing`, async (_label, send) => {
     const before = await snapshotDb(db);
-    await expectError(await send(), 409, code);
+    const error = await expectError(await send(), 409, code);
+    expect(error.details).toEqual({ orderId });
     expect(await snapshotDb(db)).toEqual(before);
   });
 
-  it('is still readable, with its status and lines', async () => {
+  it('is still readable, with its status, order and lines', async () => {
     const view = await getCart(cartId);
     expect(view.status).toBe(status);
+    expect(view.orderId).toBe(orderId);
     expect(view.lines.map((l) => [l.productId, l.quantity])).toEqual([['p_lamp', 1]]);
   });
 });

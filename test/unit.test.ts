@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { loadConfig } from '../src/config';
 import { onError } from '../src/errors';
 import { MAX_CART_LINES, MAX_LINE_QUANTITY, MAX_UNIT_PRICE_PAISE, discount, lineTotal, total } from '../src/domain/money';
+import { FakeGateway } from '../src/modules/payments/fake-gateway';
 import { withCleanup } from './helpers/cleanup';
 import { assertTestDatabaseUrl } from './helpers/test-db-url';
 
@@ -144,5 +145,34 @@ describe('onError', () => {
     expect(JSON.parse(text)).toEqual({ error: { code: 'INTERNAL', message: expect.any(String) } });
     expect(text).not.toContain('secret-detail');
     expect(log).toHaveBeenCalledOnce();
+  });
+});
+
+describe('T30 fake gateway', () => {
+  const charge = (gateway: FakeGateway, paymentToken: string, orderId = 'order-1') =>
+    gateway.charge({ orderId, amountPaise: 34_999, paymentToken });
+
+  it.each([
+    ['pm_card_visa', { outcome: 'approved', paymentRef: expect.stringMatching(/^ch_/) }],
+    ['pm_card_chargeDeclined', { outcome: 'declined', reason: 'card_declined' }],
+    ['pm_card_chargeDeclinedInsufficientFunds', { outcome: 'declined', reason: 'insufficient_funds' }],
+    ['tok_unknown', { outcome: 'declined', reason: 'invalid_payment_method' }],
+  ])('%s gives %o', async (token, expected) => {
+    expect(await charge(new FakeGateway(), token)).toEqual(expected);
+  });
+
+  it('charging the same order twice returns the first result and records one charge', async () => {
+    const gateway = new FakeGateway();
+    const first = await charge(gateway, 'pm_card_visa');
+    expect(await charge(gateway, 'pm_card_chargeDeclined')).toEqual(first);
+    expect(gateway.charges.size).toBe(1);
+  });
+
+  it('records each order separately', async () => {
+    const gateway = new FakeGateway();
+    const a = await charge(gateway, 'pm_card_visa', 'order-a');
+    const b = await charge(gateway, 'pm_card_visa', 'order-b');
+    expect(a).not.toEqual(b);
+    expect(gateway.charges.size).toBe(2);
   });
 });

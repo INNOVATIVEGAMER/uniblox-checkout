@@ -1,12 +1,14 @@
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, ne } from 'drizzle-orm';
 import type { Db, Tx } from '../../db/client';
-import { cartItems, carts, products } from '../../db/schema';
-import { MAX_CART_LINES, lineTotal, total } from '../../domain/money';
+import { cartItems, carts, orders, products } from '../../db/schema';
+import { MAX_CART_LINES, priceLines } from '../../domain/money';
 import { AppError } from '../../errors';
 
-type Cart = Pick<typeof carts.$inferSelect, 'id' | 'status'>;
+type Cart = Pick<typeof carts.$inferSelect, 'id' | 'status'> & { orderId: string | null };
 
 const cartColumns = { id: carts.id, status: carts.status };
+
+const liveOrderOf = (cartId: typeof carts.id | string) => and(eq(orders.cartId, cartId), ne(orders.status, 'failed'));
 
 async function toCartView(db: Db | Tx, cart: Cart) {
   const rows = await db
@@ -22,33 +24,40 @@ async function toCartView(db: Db | Tx, cart: Cart) {
     .where(eq(cartItems.cartId, cart.id))
     .orderBy(asc(cartItems.productId));
 
-  const lines = rows.map(({ stock, ...line }) => ({
-    ...line,
-    lineTotalPaise: lineTotal(line.unitPricePaise, line.quantity),
-    available: stock >= line.quantity,
-  }));
-  const subtotalPaise = lines.reduce((sum, line) => sum + line.lineTotalPaise, 0);
-  return { id: cart.id, status: cart.status, lines, subtotalPaise, discountPaise: 0, totalPaise: total(subtotalPaise, 0) };
+  const priced = priceLines(rows.map(({ stock, ...line }) => ({ ...line, available: stock >= line.quantity })));
+  return { id: cart.id, status: cart.status, orderId: cart.orderId, ...priced };
 }
 
 export async function createCart(db: Db) {
   const [cart] = await db.insert(carts).values({}).returning(cartColumns);
   if (!cart) throw new Error('INSERT … RETURNING produced no row');
-  return toCartView(db, cart);
+  return toCartView(db, { ...cart, orderId: null });
 }
 
 export async function loadCartView(db: Db, cartId: string) {
-  const [cart] = await db.select(cartColumns).from(carts).where(eq(carts.id, cartId));
+  const [cart] = await db
+    .select({ ...cartColumns, orderId: orders.id })
+    .from(carts)
+    .leftJoin(orders, liveOrderOf(carts.id))
+    .where(eq(carts.id, cartId));
   if (!cart) throw new AppError('CART_NOT_FOUND');
   return toCartView(db, cart);
 }
 
-async function lockOpenCart(tx: Tx, cartId: string): Promise<Cart> {
+/**
+ * Locks the cart and requires it to be open. The live order is read in a second statement: after a lock
+ * wait, a joined row would come from the snapshot taken before the wait, and miss an order that the
+ * previous lock holder just created.
+ */
+export async function lockOpenCart(tx: Tx, cartId: string): Promise<Cart> {
   const [cart] = await tx.select(cartColumns).from(carts).where(eq(carts.id, cartId)).for('no key update');
   if (!cart) throw new AppError('CART_NOT_FOUND');
-  if (cart.status === 'checked_out') throw new AppError('CART_CHECKED_OUT');
-  if (cart.status === 'pending_payment') throw new AppError('CART_PAYMENT_PENDING');
-  return cart;
+  // Every order on an open cart has failed.
+  if (cart.status === 'open') return { ...cart, orderId: null };
+
+  const [order] = await tx.select({ id: orders.id }).from(orders).where(liveOrderOf(cartId));
+  if (!order) throw new Error(`cart ${cartId} is ${cart.status} with no live order`);
+  throw new AppError(cart.status === 'checked_out' ? 'CART_CHECKED_OUT' : 'CART_PAYMENT_PENDING', { orderId: order.id });
 }
 
 export function setItemQuantity(db: Db, cartId: string, productId: string, quantity: number) {

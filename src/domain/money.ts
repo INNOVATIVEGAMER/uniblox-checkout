@@ -15,3 +15,10 @@ export function discount(subtotalPaise: number, percentOff: number): number {
 export function total(subtotalPaise: number, discountPaise: number): number {
   return subtotalPaise - discountPaise;
 }
+
+export function priceLines<Line extends { unitPricePaise: number; quantity: number }>(lines: Line[]) {
+  const priced = lines.map((line) => ({ ...line, lineTotalPaise: lineTotal(line.unitPricePaise, line.quantity) }));
+  const subtotalPaise = priced.reduce((sum, line) => sum + line.lineTotalPaise, 0);
+  const discountPaise = 0;
+  return { lines: priced, subtotalPaise, discountPaise, totalPaise: total(subtotalPaise, discountPaise) };
+}
