@@ -125,7 +125,7 @@ Agent(
   ## Instructions
   1. Focus exclusively on your lane above
   2. Generalize every finding before reporting it: name the pattern, grep for sibling instances, report all sites as ONE finding. If the grep found one site, say so.
-  2b. Scope every finding (`no-follow-up-deferral.md`): what this change caused goes in `Issues`; what was already broken goes in `Out of Scope` and never moves your verdict.
+  2b. Every finding goes in `Issues` and is fixed in this PR (`no-follow-up-deferral.md`). Never suggest deferring it or filing a new issue.
   3. Output review following the skill's format AND the output caps above
   4. Self-check: re-read your review body. Any paragraph >2 sentences or inline comment >3 lines → cut or split.
   5. Return the review body and any inline comments — DO NOT post to GitHub yourself
@@ -173,7 +173,7 @@ Agent(
   ## Instructions
   1. Focus exclusively on your lane above
   2. Generalize every finding before reporting it: name the pattern, grep for sibling instances, report all sites as ONE finding. If the grep found one site, say so.
-  2b. Scope every finding (`no-follow-up-deferral.md`): what this change caused goes in `Issues`; what was already broken goes in `Out of Scope` and never moves your verdict.
+  2b. Every finding goes in `Issues` and is fixed in this PR (`no-follow-up-deferral.md`). Never suggest deferring it or filing a new issue.
   3. Output review following the skill's format AND the output caps above
   4. Self-check: re-read your review body. Any paragraph >2 sentences or inline comment >3 lines → cut or split.
   5. Return the review body and any inline comments — DO NOT post to GitHub yourself
@@ -387,7 +387,7 @@ Agent(
   2. Check if previous architectural issues are fixed — and whether the same defect survives at the sites the fix did not touch
   3. Look for new architectural issues in the changes
   4. Generalize every finding before reporting it: name the pattern, grep for sibling instances, report all sites as ONE finding. If the grep found one site, say so.
-  4b. Scope every finding (`no-follow-up-deferral.md`): what this change caused goes in the findings table; what was already broken goes in `Out of Scope` and never moves your verdict.
+  4b. Every finding goes in the findings table and is fixed in this PR (`no-follow-up-deferral.md`). Never suggest deferring it or filing a new issue.
   5. Self-check: re-read your review. Any paragraph >2 sentences or inline comment >3 lines → cut or split.
   6. Return findings — DO NOT post to GitHub yourself
   """
@@ -430,7 +430,7 @@ Agent(
   2. Check if previous SDE2 issues are fixed — and whether the same defect survives at the sites the fix did not touch
   3. Look for new code quality issues in the changes
   4. Generalize every finding before reporting it: name the pattern, grep for sibling instances, report all sites as ONE finding. If the grep found one site, say so.
-  4b. Scope every finding (`no-follow-up-deferral.md`): what this change caused goes in the findings table; what was already broken goes in `Out of Scope` and never moves your verdict.
+  4b. Every finding goes in the findings table and is fixed in this PR (`no-follow-up-deferral.md`). Never suggest deferring it or filing a new issue.
   5. Self-check: re-read your review. Any paragraph >2 sentences or inline comment >3 lines → cut or split.
   6. Return findings — DO NOT post to GitHub yourself
   """
@@ -472,8 +472,6 @@ EOF
 | Some issues fixed, only minor remaining              | `COMMENT`         |
 | Blocking issues still present OR new blocking issues | `REQUEST_CHANGES` |
 
-`Out of Scope` findings never move a verdict.
-
 ---
 
 ## Output Formats
@@ -494,14 +492,6 @@ EOF
 | 2   | SDE2      | ⚠️ Minor    | `file.ts:15` | {description} |
 
 {Omit Issues table entirely if no issues found.}
-
-### Out of Scope
-
-| #   | File         | Issue         |
-| --- | ------------ | ------------- |
-| 1   | `file.ts:90` | {description} |
-
-{Omit entirely if none. The author files these; they do not gate the PR.}
 
 ### Links
 
@@ -534,14 +524,6 @@ EOF
 
 {Omit New Issues table entirely if none.}
 
-### Out of Scope
-
-| #   | File         | Issue         |
-| --- | ------------ | ------------- |
-| 1   | `file.ts:90` | {description} |
-
-{Omit entirely if none. The author files these; they do not gate the PR.}
-
 ### Links
 
 - **PR:** {pr_url}
@@ -559,4 +541,4 @@ EOF
 5. **Follow loaded rules** - Rules files are source of truth
 6. **Consider context** - Understand the issue's goals
 7. **In follow-up mode** - Focus on changes, don't repeat old feedback
-8. **Scope, don't defer** - Report everything. What this change caused is fixed in this PR; what was already broken goes in `Out of Scope` for the author to file. See `.claude/rules/no-follow-up-deferral.md`.
+8. **No deferral framing** - Anything worth flagging is fixable in this PR. Do not recommend deferring to a follow-up PR or filing a new issue unless you cite an existing tracked issue that owns the work. See `.claude/rules/no-follow-up-deferral.md`.

@@ -11,7 +11,7 @@ A change is not done when the immediate code compiles. It is done when the surro
 
 **The signal that you are done:** reading through the changed area feels natural end-to-end, not like a simplified core surrounded by stale scaffolding.
 
-**The signal that you have gone too far:** the work no longer traces back to the change you set out to make. The ripple is what your change broke; what was already broken is a separate issue (`no-follow-up-deferral.md`).
+**The signal that you have gone too far:** the work no longer traces back to the change you set out to make. The ripple is what your change broke or made inconsistent; unrelated cleanup elsewhere is not part of the ripple.
 
 ## Examples
 

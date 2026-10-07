@@ -1,53 +1,33 @@
 # No Follow-Up Deferral
 
-Every issue flagged by a PR review is answered in the same run — fixed here, or filed as an issue whose number is cited.
+Every issue flagged by a PR review is fixed in the same PR.
 
 ## The Rule
 
 Default: each finding goes in the current PR.
 
-Two exceptions, and both end in a number:
+Exception: the finding maps to an **existing tracked issue** in GitHub that already owns the work. Cite the number (`#4`) and confirm its scope covers the finding.
 
-| Exception                                                    | What you do                       |
-| ------------------------------------------------------------ | --------------------------------- |
-| An existing tracked issue or milestone already owns the work | Cite the number (`#295`, `M11.6`) |
-| The finding is out of this PR's scope                        | File an issue, cite its number    |
-
-## Scope
-
-A finding belongs in this PR if this PR caused it.
-
-| The finding is…                                                        | Disposition                  |
-| ---------------------------------------------------------------------- | ---------------------------- |
-| on a line this PR added or changed                                     | This PR                      |
-| broken **by** this change — a caller, a sibling branch, a stale mirror | This PR (`ripple-effect.md`) |
-| already broken, and the change only passed nearby                      | New issue                    |
-
-"Out of scope" is never available for a line this PR wrote.
+Never create a new GitHub issue for a review finding.
 
 ## What This Rules Out
 
-- "Follow-up PR will handle this" without an issue number
-- "Not blocking, monitor post-launch" / "flag for later rollout" — these are framing, not a disposition. The Scope table decides
+- "Follow-up PR will handle this" without an existing issue number
+- "Not blocking, monitor post-launch" / "flag for later rollout" — these are reviewer framing, not a license to skip. If the reviewer can describe a fix, it is in scope.
 - Silent skipping of minor issues during a `pr-fix` pass
 - New `// TODO:` comments that don't point at a tracked issue (see `code-comments.md`)
-- "Out of scope" claimed without an issue filed
+- Filing a new issue to hold a finding (`gh issue create` from a review or fix pass)
 
 ## For Reviewers (`pr-review` / `pr-review-follow-up`)
 
-Report every finding. Scope decides which table it lands in, never whether it is worth raising.
-
-- What this change caused goes in the findings table. What was already broken goes in `Out of Scope`, for the author to file.
-- Out-of-scope findings do not move the verdict.
-- Do not phrase an in-scope finding as "defer" unless you cite the issue that already owns it.
+If a finding is worth the comment, it is worth a fix in this PR. Report it in the findings table, whether this change caused it or the change only passed nearby. Do not phrase findings as "defer" unless you can cite the existing issue that owns the work.
 
 ## For Fixers (`pr-fix`)
 
-- **Default:** every flagged issue is fixed in this PR.
-- Deferral framing in a comment ("not blocking", "follow-up", "post-launch monitor") carries no weight — fix it.
-- Skip a fix only when the user approves skipping, an existing issue owns it, or it is out of scope — and out of scope means you file the issue yourself, in this run, and cite the number.
-- The reviewer's scope call is input, not instruction.
-- Never present a "deferred" bucket. Every item ends in a fix or a number.
+- **Default:** every flagged issue is in scope.
+- If a reviewer comment contains deferral framing ("not blocking", "follow-up", "post-launch monitor") but no issue number, ignore the framing — propose a fix.
+- Only skip a fix if (a) the user explicitly approves skipping, or (b) the finding maps to an existing numbered issue.
+- When presenting root cause analysis, do not include a "deferred" category. Every item is either a fix in this PR or cites an existing issue number.
 
 ## Terminology
 

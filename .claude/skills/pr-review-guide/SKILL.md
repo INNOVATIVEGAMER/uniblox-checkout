@@ -37,7 +37,7 @@ Always load and check the diff against:
 | [guard-clauses.md](../../rules/guard-clauses.md)                                 | Flag deeply nested conditionals; require happy path at column 0                       |
 | [logging-proportionality.md](../../rules/logging-proportionality.md)             | Flag noisy incremental logs; require one dense canonical log line                     |
 | [code-comments.md](../../rules/code-comments.md)                                 | Flag labels, restatements, rationale blocks, and unjustified TODOs                    |
-| [no-follow-up-deferral.md](../../rules/no-follow-up-deferral.md)                 | Scope each finding: this PR, or an issue the author files. Reject deferral framing    |
+| [no-follow-up-deferral.md](../../rules/no-follow-up-deferral.md)                 | Every finding is fixed in this PR. Reject deferral framing unless an existing issue is cited |
 | [project-stage.md](../../rules/project-stage.md)                                 | Flag backcompat shims and feature flags; nothing is deployed yet  |
 
 ## Review Process
@@ -142,15 +142,11 @@ For findings on a branch point, apply `enumerate-state-space.md`: check every st
 
 **Also check the caller.** Before flagging a missing state, confirm the state is reachable — an upstream gate may already handle it, in which case the finding is dead code, not a gap.
 
-**Then place each site.** Sites this change caused are one finding; sites that were already wrong are one `Out of Scope` row.
-
 ## Scope of Findings
 
-Report every finding. Scope decides which table it lands in, never whether it is worth raising.
+Any issue you flag is fixable in this PR, whether this change caused it or only passed nearby. Report it in the Issues table. See `.claude/rules/no-follow-up-deferral.md`.
 
-What this change caused goes in the findings table and is fixed in this PR. What was already broken goes in `Out of Scope` for the author to file — one line each, no inline comment, no effect on the verdict. See `.claude/rules/no-follow-up-deferral.md`.
-
-Do not phrase an in-scope finding as "defer" — no "not blocking, monitor post-launch", "flag for later rollout", or "worth doing in a follow-up" unless you cite an existing tracked issue that already owns the work (`#295`, `M11.6`).
+Do not recommend deferring to a follow-up PR or a new issue — no "not blocking, monitor post-launch", "flag for later rollout", or "worth doing in a follow-up" — unless you cite an existing tracked issue that already owns the work (`#4`).
 
 ## Output Format
 
@@ -165,12 +161,6 @@ The template below **is the entire review body**. There is no preamble paragraph
 | --- | ----------- | ------------ | --------------------- | ---------------------------- |
 | 1   | ❌ Blocking | `file.ts:42` | {concise description} | {only if fix is non-obvious} |
 | 2   | ⚠️ Minor    | `file.ts:15` | {concise description} | {only if fix is non-obvious} |
-
-### Out of Scope
-
-| #   | File         | Issue                    |
-| --- | ------------ | ------------------------ |
-| 1   | `file.ts:90` | {description, ≤15 words} |
 
 ### Architectural Concerns
 
@@ -191,7 +181,6 @@ Use: **{Concern title}** (`file.ts:line`) — 1–2 sentences max. Omit section 
 - Omit `Architectural Concerns` section entirely if there are none
 - Omit `Research Flags` section entirely if there are none
 - Omit `Issues` table entirely if there are no issues (verdict will be `APPROVED`)
-- Omit `Out of Scope` entirely if there are none. `APPROVED` is compatible with a populated one
 - `Suggestion` column: only populate when the fix isn't obvious from the description
 - **No preamble or trailing paragraph.** The verdict line is the only body prose above the Issues table.
 - **No "Findings", "Observations", "Notes", "Informational", "What's done well" sections** — banned regardless of heading
@@ -259,9 +248,6 @@ To get the correct `line` number for inline comments:
 | No issues found                                    | `APPROVED`                            |
 | Only minor style/preference issues                 | `MINOR CHANGES` or `NEEDS DISCUSSION` |
 | Bugs, missing error handling, architectural issues | `CHANGES REQUIRED`                    |
-
-`Out of Scope` rows never move a verdict.
-
 ## Agent-Specific Focus
 
 Each agent applies their own lens when using this skill:

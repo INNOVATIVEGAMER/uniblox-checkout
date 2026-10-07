@@ -37,7 +37,7 @@ Always load and check the new diff against:
 | [guard-clauses.md](../../rules/guard-clauses.md)                                 | Flag deeply nested conditionals; require happy path at column 0                       |
 | [logging-proportionality.md](../../rules/logging-proportionality.md)             | Flag noisy incremental logs; require one dense canonical log line                     |
 | [code-comments.md](../../rules/code-comments.md)                                 | Flag labels, restatements, rationale blocks, and unjustified TODOs                    |
-| [no-follow-up-deferral.md](../../rules/no-follow-up-deferral.md)                 | Scope each finding: this PR, or an issue the author files. Reject deferral framing    |
+| [no-follow-up-deferral.md](../../rules/no-follow-up-deferral.md)                 | Every finding is fixed in this PR. Reject deferral framing unless an existing issue is cited |
 | [project-stage.md](../../rules/project-stage.md)                                 | Flag backcompat shims and feature flags; nothing is deployed yet  |
 
 ## Prerequisites
@@ -71,7 +71,6 @@ Always load and check the new diff against:
    - **Extend to sibling sites**: other call sites of any symbol the fix touched, other implementations of an interface it changed, the other branches of any state machine it edited, and the callers that gate it
    - A fix applied to one instance and not its siblings is a finding now, not next round
    - Don't audit unrelated code — the boundary is "what this change implicates", not "what changed"
-   - A sibling the change did not cause to break is an `Out of Scope` row, not a reason to grow the PR
    - Check for new issues introduced by fixes
 
 6. **Generalize each finding before reporting** (see below)
@@ -128,15 +127,11 @@ For findings on a branch point, apply `enumerate-state-space.md`: check every st
 
 **Verifying a previous fix counts too.** When a prior finding is fixed, check whether the same defect survives at the sites the fix did not touch before marking it ✅.
 
-**Then place each site.** Sites this change caused are one finding; sites that were already wrong are one `Out of Scope` row.
-
 ## Scope of Findings
 
-Report every finding. Scope decides which table it lands in, never whether it is worth raising.
+Any new issue you flag is fixable in this PR, whether this change caused it or only passed nearby. Report it in the New Issues table. See `.claude/rules/no-follow-up-deferral.md`.
 
-What this change caused goes in the findings table and is fixed in this PR. What was already broken goes in `Out of Scope` for the author to file — one line each, no inline comment, no effect on the verdict. See `.claude/rules/no-follow-up-deferral.md`.
-
-Do not phrase an in-scope finding as "defer" — no "not blocking, monitor post-launch", "flag for later rollout", or "worth doing in a follow-up" unless you cite an existing tracked issue that already owns the work (`#295`, `M11.6`).
+Do not recommend deferring to a follow-up PR or a new issue — no "not blocking, monitor post-launch", "flag for later rollout", or "worth doing in a follow-up" — unless you cite an existing tracked issue that already owns the work (`#4`).
 
 ## Output Format
 
@@ -157,12 +152,6 @@ The template below **is the entire review body**. No preamble, no trailing summa
 | #   | Severity    | File         | Issue         | Suggestion                   |
 | --- | ----------- | ------------ | ------------- | ---------------------------- |
 | 1   | ❌ Blocking | `file.ts:10` | {description} | {only if fix is non-obvious} |
-
-### Out of Scope
-
-| #   | File         | Issue                    |
-| --- | ------------ | ------------------------ |
-| 1   | `file.ts:90` | {description, ≤15 words} |
 ```
 
 **Rules:**
@@ -170,7 +159,6 @@ The template below **is the entire review body**. No preamble, no trailing summa
 - `Unresolved Issues`: only include rows for issues that are ❌ Still Present or ⚠️ Partial. No ✅ Fixed rows.
 - If all previous issues are resolved, replace the table with: _All previous issues resolved._
 - `New Issues`: omit section entirely if no new issues found
-- `Out of Scope`: omit section entirely if none. These rows never move the verdict
 - **No preamble or trailing paragraph.** The verdict line is the only body prose above the Unresolved Issues table
 - **No "Findings", "Observations", "Notes", "What's done well" sections** — banned regardless of heading
 - **No praise.** Verdict signals quality; prose doesn't
