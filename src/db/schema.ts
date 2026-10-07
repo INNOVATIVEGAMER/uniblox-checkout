@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { bigint, check, integer, pgTable, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
-import { MAX_LINE_QUANTITY } from '../domain/money';
+import { MAX_LINE_QUANTITY, MAX_UNIT_PRICE_PAISE } from '../domain/money';
 
 export const CART_STATUSES = ['open', 'pending_payment', 'checked_out'] as const;
 
@@ -17,7 +17,7 @@ export const products = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    check('products_price_paise_nonneg', sql`${t.pricePaise} >= 0`),
+    check('products_price_paise_range', sql`${t.pricePaise} BETWEEN 0 AND ${sql.raw(String(MAX_UNIT_PRICE_PAISE))}`),
     check('products_stock_nonneg', sql`${t.stock} >= 0`),
   ],
 );

@@ -1,8 +1,9 @@
-import { asc, sql } from 'drizzle-orm';
+import { asc, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { products } from '../src/db/schema';
 import { SEED_PRODUCTS, seed } from '../src/db/seed';
+import { MAX_UNIT_PRICE_PAISE } from '../src/domain/money';
 import { createTestApp, sendJson } from './helpers/app';
 import { holdLock } from './helpers/barrier';
 import { withCleanup } from './helpers/cleanup';
@@ -84,6 +85,25 @@ describe('PATCH /admin/products/:id', () => {
       () => short.pool.end(),
     );
     expect(await listProducts()).toEqual(SEED_BY_ID);
+  });
+});
+
+describe('products table', () => {
+  const setLampPrice = (pricePaise: number) =>
+    db.update(products).set({ pricePaise }).where(eq(products.id, 'p_lamp'));
+
+  it('accepts a price at MAX_UNIT_PRICE_PAISE', async () => {
+    await setLampPrice(MAX_UNIT_PRICE_PAISE);
+    expect((await listProducts()).find((p) => p.id === 'p_lamp')?.pricePaise).toBe(MAX_UNIT_PRICE_PAISE);
+  });
+
+  it.each([
+    ['above MAX_UNIT_PRICE_PAISE', MAX_UNIT_PRICE_PAISE + 1],
+    ['below zero', -1],
+  ])('rejects a price %s with the range CHECK, even when the write bypasses the API', async (_label, pricePaise) => {
+    await expect(setLampPrice(pricePaise)).rejects.toMatchObject({
+      cause: { code: '23514', constraint: 'products_price_paise_range' },
+    });
   });
 });
 

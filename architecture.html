@@ -183,7 +183,7 @@ li { margin: 3px 0; }
 <pre><code>products
   id                text PK
   name              text NOT NULL
-  price_paise       bigint NOT NULL CHECK (price_paise &gt;= 0)
+  price_paise       bigint NOT NULL CHECK (price_paise BETWEEN 0 AND 1000000000)   -- MAX_UNIT_PRICE_PAISE
   stock             integer NOT NULL CHECK (stock &gt;= 0)
   updated_at        timestamptz NOT NULL
 

@@ -1,0 +1,2 @@
+ALTER TABLE "products" DROP CONSTRAINT "products_price_paise_nonneg";--> statement-breakpoint
+ALTER TABLE "products" ADD CONSTRAINT "products_price_paise_range" CHECK ("products"."price_paise" BETWEEN 0 AND 1000000000);

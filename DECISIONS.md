@@ -159,7 +159,7 @@ For rounding, the options were round-half-up, banker's rounding, and floor.
 **Why:**
 
 - **Integer arithmetic on safe integers is exact.** `Math.floor(n / 100)` is exact for any integer `n` below 2^53: IEEE division is correctly rounded, and `n / 100` is never within 0.01 of the next integer, while the rounding error is far below that.
-- **The bounds keep every intermediate value safe.** A unit price is capped at 1,000,000,000 paise (₹1 crore, enforced by the PATCH schema), a line quantity at 1000, and a cart at 50 lines (`MAX_CART_LINES`, which the cart PUT enforces with 422 `CART_LINE_LIMIT`). So a full cart's `subtotal × 100` is at most 5 × 10^15, below 2^53 ≈ 9 × 10^15. Without the line cap, about 90 lines at the caps would pass 2^53. T27 includes a full cart at the caps.
+- **The bounds keep every intermediate value safe.** A unit price is capped at 1,000,000,000 paise (₹1 crore, enforced by the PATCH schema and backed by the `products_price_paise_range` CHECK, so a seed or SQL write can't exceed it either), a line quantity at 1000, and a cart at 50 lines (`MAX_CART_LINES`, which the cart PUT enforces with 422 `CART_LINE_LIMIT`). So a full cart's `subtotal × 100` is at most 5 × 10^15, below 2^53 ≈ 9 × 10^15. Without the line cap, about 90 lines at the caps would pass 2^53. T27 includes a full cart at the caps.
 - **Floor is deterministic and can't overshoot.** It favours the store by under one paisa. With `percentOff ≤ 100`, the discount never exceeds the subtotal, so the total is never negative.
 - **The seed exposes a rounding slip.** The cable costs 34999 paise, so 10% off gives 3499 with floor and 3500 with `Math.round`. A rounding slip fails T27.
 

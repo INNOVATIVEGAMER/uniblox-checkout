@@ -15,6 +15,13 @@
       "when": 1791344072649,
       "tag": "0001_carts",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791346228512,
+      "tag": "0002_products_price_range",
+      "breakpoints": true
     }
   ]
 }

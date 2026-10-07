@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { loadConfig } from '../src/config';
 import { onError } from '../src/errors';
 import { MAX_CART_LINES, MAX_LINE_QUANTITY, MAX_UNIT_PRICE_PAISE, discount, lineTotal, total } from '../src/domain/money';
+import { withCleanup } from './helpers/cleanup';
 import { assertTestDatabaseUrl } from './helpers/test-db-url';
 
 describe('T27 money', () => {
@@ -93,6 +94,33 @@ describe('test database guard', () => {
     'postgres://checkout:checkout@localhost:5432/checkout_test?sslmode=disable',
   ])('accepts %s', (url) => {
     expect(assertTestDatabaseUrl(url)).toBe(url);
+  });
+});
+
+describe('withCleanup', () => {
+  const ok = () => Promise.resolve();
+  const fail = (message: string) => () => Promise.reject(new Error(message));
+
+  it('returns the body result after running every cleanup', async () => {
+    const cleanup = vi.fn(ok);
+    await expect(withCleanup(() => Promise.resolve(7), cleanup, cleanup)).resolves.toBe(7);
+    expect(cleanup).toHaveBeenCalledTimes(2);
+  });
+
+  it('rethrows the body error over a failing cleanup, and still runs every cleanup', async () => {
+    const cleanup = vi.fn(ok);
+    await expect(withCleanup(fail('body'), fail('cleanup'), cleanup)).rejects.toThrow('body');
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it('throws a single cleanup failure as itself', async () => {
+    await expect(withCleanup(ok, ok, fail('end'))).rejects.toThrow('end');
+  });
+
+  it('reports every cleanup failure when more than one fails', async () => {
+    const err: unknown = await withCleanup(ok, fail('release'), fail('end')).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AggregateError);
+    expect(err instanceof AggregateError && err.errors.map((e: Error) => e.message)).toEqual(['release', 'end']);
   });
 });
 
