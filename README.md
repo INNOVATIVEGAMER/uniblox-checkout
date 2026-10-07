@@ -275,16 +275,16 @@ A 500 or 503 that happens after the charge leaves the order `pending_payment`, a
   "id": "0b8f2d4e-6a1c-4e3b-8d5f-7a9c1e3b5d7f",
   "cartId": "5f0c6a0e-3b1d-4c2a-9e7f-1a2b3c4d5e6f",
   "status": "paid",
-  "lines": [
-    { "productId": "p_cable", "productName": "USB-C Cable", "unitPricePaise": 34999, "quantity": 3, "lineTotalPaise": 104997 }
-  ],
   "subtotalPaise": 104997,
   "discountPaise": 0,
   "totalPaise": 104997,
   "paymentRef": "ch_…",
   "failureReason": null,
   "createdAt": "2026-10-07T10:00:00.000Z",
-  "resolvedAt": "2026-10-07T10:00:00.120Z"
+  "resolvedAt": "2026-10-07T10:00:00.120Z",
+  "lines": [
+    { "productId": "p_cable", "productName": "USB-C Cable", "unitPricePaise": 34999, "quantity": 3, "lineTotalPaise": 104997 }
+  ]
 }
 ```
 

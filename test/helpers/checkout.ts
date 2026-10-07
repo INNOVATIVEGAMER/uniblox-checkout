@@ -4,6 +4,7 @@ import { expect } from 'vitest';
 import { z } from 'zod';
 import type { Db } from '../../src/db/client';
 import { ORDER_STATUSES, idempotencyKeys, orders, products } from '../../src/db/schema';
+import type { checkoutBodySchema } from '../../src/modules/checkout/input';
 import type { PaymentGateway } from '../../src/modules/payments/gateway';
 import { type TestApp, sendJson } from './app';
 
@@ -33,7 +34,7 @@ export type OrderView = z.infer<typeof orderViewSchema>;
 
 export const newKey = () => `key-${randomUUID()}`;
 
-export type CheckoutBody = { expectedTotalPaise: number; paymentToken: string };
+export type CheckoutBody = z.infer<typeof checkoutBodySchema>;
 
 export function postCheckout(app: TestApp, cartId: string, key: string, body: CheckoutBody) {
   return sendJson(app, 'POST', `/carts/${cartId}/checkout`, body, { 'Idempotency-Key': key });

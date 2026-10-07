@@ -240,7 +240,7 @@ li { margin: 3px 0; }
       <li>phase 3: approved or declined goes to <code>finalizeOrder</code>; unknown, meaning any thrown error, returns 202 with <code>Retry-After</code>.</li>
     </ul></li>
   <li><strong><code>payments/finalize.ts</code>:</strong> <code>finalizeOrder</code>, with the conditional claim on the order and the product restore in ID order. It's written in full now, and recovery reuses it in 05.</li>
-  <li><strong><code>orders/view.ts</code>:</strong> <code>loadOrderView</code>, <code>toOrderView</code> and <code>toCheckoutResponse</code>. A new route, <code>GET /orders/:id</code>.</li>
+  <li><strong><code>orders/view.ts</code>:</strong> <code>loadOrderView</code> and <code>toCheckoutResponse</code>. A new route, <code>GET /orders/:id</code>.</li>
   <li><strong>Test helper:</strong> <code>test/helpers/gate.ts</code>, the <code>gated(fake, { at })</code> decorator with <code>entered</code> and <code>release()</code>.</li>
 </ul>
 <h3>Errors introduced</h3>
