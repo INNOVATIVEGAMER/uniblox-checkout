@@ -25,16 +25,33 @@ export const cartViewSchema = z.strictObject({
 });
 
 export function cartRequests(app: TestApp) {
+  async function newCart(): Promise<string> {
+    const res = await app.request('/carts', { method: 'POST' });
+    expect(res.status).toBe(201);
+    return cartViewSchema.parse(await res.json()).id;
+  }
+  const putItem = async (cartId: string, productId: string, quantity: number) =>
+    sendJson(app, 'PUT', `/carts/${cartId}/items/${productId}`, { quantity });
+  const deleteItem = async (cartId: string, productId: string) =>
+    app.request(`/carts/${cartId}/items/${productId}`, { method: 'DELETE' });
+
   return {
-    async newCart(): Promise<string> {
-      const res = await app.request('/carts', { method: 'POST' });
-      expect(res.status).toBe(201);
-      return cartViewSchema.parse(await res.json()).id;
+    newCart,
+    putItem,
+    deleteItem,
+    async getCart(cartId: string) {
+      const res = await app.request(`/carts/${cartId}`);
+      expect(res.status).toBe(200);
+      return cartViewSchema.parse(await res.json());
     },
-    putItem: async (cartId: string, productId: string, quantity: number) =>
-      sendJson(app, 'PUT', `/carts/${cartId}/items/${productId}`, { quantity }),
-    deleteItem: async (cartId: string, productId: string) =>
-      app.request(`/carts/${cartId}/items/${productId}`, { method: 'DELETE' }),
+    /** A new cart holding `lines`, as { productId: quantity }. */
+    async cartWith(lines: Record<string, number>): Promise<string> {
+      const cartId = await newCart();
+      for (const [productId, quantity] of Object.entries(lines)) {
+        expect((await putItem(cartId, productId, quantity)).status).toBe(201);
+      }
+      return cartId;
+    },
   };
 }
 
