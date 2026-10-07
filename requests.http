@@ -105,21 +105,21 @@ Content-Type: application/json
 # @name paid
 POST {{base}}/carts/{{payCart.response.body.id}}/checkout
 Content-Type: application/json
-Idempotency-Key: walkthrough-pay-1
+Idempotency-Key: pay-1-{{payCart.response.body.id}}
 
 { "expectedTotalPaise": 69998, "paymentToken": "pm_card_visa" }
 
 ### Replay: the same key returns the same order (201), with Idempotent-Replayed: true, and charges nothing
 POST {{base}}/carts/{{payCart.response.body.id}}/checkout
 Content-Type: application/json
-Idempotency-Key: walkthrough-pay-1
+Idempotency-Key: pay-1-{{payCart.response.body.id}}
 
 { "expectedTotalPaise": 69998, "paymentToken": "pm_card_visa" }
 
 ### 422 IDEMPOTENCY_KEY_REUSED: the same key with another token
 POST {{base}}/carts/{{payCart.response.body.id}}/checkout
 Content-Type: application/json
-Idempotency-Key: walkthrough-pay-1
+Idempotency-Key: pay-1-{{payCart.response.body.id}}
 
 { "expectedTotalPaise": 69998, "paymentToken": "pm_card_chargeDeclined" }
 
@@ -129,7 +129,7 @@ GET {{base}}/orders/{{paid.response.body.id}}
 ### 409 CART_CHECKED_OUT: a new key on the paid cart
 POST {{base}}/carts/{{payCart.response.body.id}}/checkout
 Content-Type: application/json
-Idempotency-Key: walkthrough-pay-2
+Idempotency-Key: pay-2-{{payCart.response.body.id}}
 
 { "expectedTotalPaise": 69998, "paymentToken": "pm_card_visa" }
 
@@ -146,28 +146,28 @@ Content-Type: application/json
 ### 409 PRICE_CHANGED: a stale total, with the current breakdown
 POST {{base}}/carts/{{declineCart.response.body.id}}/checkout
 Content-Type: application/json
-Idempotency-Key: walkthrough-stale-1
+Idempotency-Key: stale-1-{{declineCart.response.body.id}}
 
 { "expectedTotalPaise": 1, "paymentToken": "pm_card_visa" }
 
 ### 402 PAYMENT_FAILED: declined. The stock is released and the cart reopens
 POST {{base}}/carts/{{declineCart.response.body.id}}/checkout
 Content-Type: application/json
-Idempotency-Key: walkthrough-decline-1
+Idempotency-Key: decline-1-{{declineCart.response.body.id}}
 
 { "expectedTotalPaise": 129950, "paymentToken": "pm_card_chargeDeclined" }
 
 ### The same key replays the 402
 POST {{base}}/carts/{{declineCart.response.body.id}}/checkout
 Content-Type: application/json
-Idempotency-Key: walkthrough-decline-1
+Idempotency-Key: decline-1-{{declineCart.response.body.id}}
 
 { "expectedTotalPaise": 129950, "paymentToken": "pm_card_chargeDeclined" }
 
 ### A new key pays (201)
 POST {{base}}/carts/{{declineCart.response.body.id}}/checkout
 Content-Type: application/json
-Idempotency-Key: walkthrough-decline-2
+Idempotency-Key: decline-2-{{declineCart.response.body.id}}
 
 { "expectedTotalPaise": 129950, "paymentToken": "pm_card_visa" }
 

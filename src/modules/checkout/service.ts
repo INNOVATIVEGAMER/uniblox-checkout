@@ -9,7 +9,8 @@ import { type CheckoutResponse, loadOrderView, toCheckoutResponse } from '../ord
 import { finalizeOrder } from '../payments/finalize';
 import type { PaymentGateway, Resolution } from '../payments/gateway';
 import { lockProducts } from '../products/lock';
-import { type CheckoutInput, type Claim, claimKey, completeKeyWithError, requestHash } from './idempotency';
+import { type Claim, claimKey, completeKeyWithError, requestHash } from './idempotency';
+import type { CheckoutInput } from './input';
 
 export type CheckoutDeps = { db: Db; gateway: PaymentGateway; config: Pick<Config, 'GATEWAY_TIMEOUT_MS'> };
 

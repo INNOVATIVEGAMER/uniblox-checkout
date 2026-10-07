@@ -26,33 +26,14 @@ const lineColumns = {
   lineTotalPaise: orderItems.lineTotalPaise,
 };
 
-type OrderRow = { [K in keyof typeof orderColumns]: (typeof orders.$inferSelect)[K] };
-type OrderLine = { [K in keyof typeof lineColumns]: (typeof orderItems.$inferSelect)[K] };
-
-export function toOrderView(order: OrderRow, lines: OrderLine[]) {
-  return {
-    id: order.id,
-    cartId: order.cartId,
-    status: order.status,
-    lines,
-    subtotalPaise: order.subtotalPaise,
-    discountPaise: order.discountPaise,
-    totalPaise: order.totalPaise,
-    paymentRef: order.paymentRef,
-    failureReason: order.failureReason,
-    createdAt: order.createdAt,
-    resolvedAt: order.resolvedAt,
-  };
-}
-
-export type OrderView = ReturnType<typeof toOrderView>;
-
-export async function loadOrderView(db: Db, orderId: string): Promise<OrderView> {
+export async function loadOrderView(db: Db, orderId: string) {
   const [order] = await db.select(orderColumns).from(orders).where(eq(orders.id, orderId));
   if (!order) throw new AppError('ORDER_NOT_FOUND');
   const lines = await db.select(lineColumns).from(orderItems).where(eq(orderItems.orderId, orderId)).orderBy(asc(orderItems.productId));
-  return toOrderView(order, lines);
+  return { ...order, lines };
 }
+
+export type OrderView = Awaited<ReturnType<typeof loadOrderView>>;
 
 export type CheckoutResponse = { status: number; body: unknown; headers: Record<string, string> };
 

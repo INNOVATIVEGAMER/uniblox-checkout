@@ -22,13 +22,13 @@ export async function within<T>(promise: Promise<T>, label: string): Promise<T> 
 }
 
 /** Resolves with the first `n` of `promises` to fulfil, in the order they fulfilled. */
-export function firstSettled<T>(promises: Promise<T>[], n: number): Promise<T[]> {
+export function firstFulfilled<T>(promises: Promise<T>[], n: number): Promise<T[]> {
   return new Promise((resolve, reject) => {
-    const settled: T[] = [];
+    const fulfilled: T[] = [];
     for (const promise of promises) {
       promise.then((value) => {
-        settled.push(value);
-        if (settled.length === n) resolve([...settled]);
+        fulfilled.push(value);
+        if (fulfilled.length === n) resolve([...fulfilled]);
       }, reject);
     }
   });

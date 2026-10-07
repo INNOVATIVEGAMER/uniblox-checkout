@@ -1,14 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import type { ChargeInput, ChargeResult, PaymentGateway } from './gateway';
 
-const DECLINE_REASONS: Record<string, string> = {
-  pm_card_chargeDeclined: 'card_declined',
-  pm_card_chargeDeclinedInsufficientFunds: 'insufficient_funds',
-};
+const DECLINE_REASONS = new Map([
+  ['pm_card_chargeDeclined', 'card_declined'],
+  ['pm_card_chargeDeclinedInsufficientFunds', 'insufficient_funds'],
+]);
 
 function outcomeFor(paymentToken: string): ChargeResult {
   if (paymentToken === 'pm_card_visa') return { outcome: 'approved', paymentRef: `ch_${randomUUID()}` };
-  return { outcome: 'declined', reason: DECLINE_REASONS[paymentToken] ?? 'invalid_payment_method' };
+  return { outcome: 'declined', reason: DECLINE_REASONS.get(paymentToken) ?? 'invalid_payment_method' };
 }
 
 /** An in-memory gateway shaped like Stripe's test mode. Charges are idempotent per orderId. */

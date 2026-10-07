@@ -12,7 +12,7 @@ import { withCleanup } from './helpers/cleanup';
 import { resetDb } from './helpers/db';
 import { errorBodySchema, expectError } from './helpers/errors';
 import { gated } from './helpers/gate';
-import { firstSettled, within } from './helpers/within';
+import { firstFulfilled, within } from './helpers/within';
 
 const { app, appWith, db, pool } = createTestApp();
 const { newCart, putItem, cartWith } = cartRequests(app);
@@ -98,7 +98,7 @@ describe.each([
   });
 });
 
-async function liveOrderOf(cartId: string): Promise<string | undefined> {
+async function orderOf(cartId: string): Promise<string | undefined> {
   const [order] = await db.select({ id: orders.id }).from(orders).where(eq(orders.cartId, cartId));
   return order?.id;
 }
@@ -118,8 +118,8 @@ describe('T3 one key sent 10 times behind a cart barrier, gated before the charg
           gate.release(),
         );
         await gate.entered();
-        const losers = await within(firstSettled(requests, 9), 'the 9 losers did not settle');
-        const orderId = await liveOrderOf(cartId);
+        const losers = await within(firstFulfilled(requests, 9), 'the 9 losers did not settle');
+        const orderId = await orderOf(cartId);
         for (const loser of losers) {
           expect((await expectOrder(loser, 202, { replayed: true })).id).toBe(orderId);
         }
@@ -162,8 +162,8 @@ describe('T5 five keys on one cart behind a cart barrier, gated', () => {
           async () => gate.release(),
         );
         await gate.entered();
-        const losers = await within(firstSettled(requests, 4), 'the 4 losers did not settle');
-        const orderId = await liveOrderOf(cartId);
+        const losers = await within(firstFulfilled(requests, 4), 'the 4 losers did not settle');
+        const orderId = await orderOf(cartId);
         for (const { res } of losers) {
           expect((await expectError(res, 409, 'CART_PAYMENT_PENDING')).details).toEqual({ orderId });
         }

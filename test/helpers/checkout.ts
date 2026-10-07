@@ -74,11 +74,10 @@ export async function orderStatus(db: Db, orderId: string) {
 
 const countSchema = z.tuple([z.object({ n: z.number() })]);
 
-/** Backends in this database sitting idle inside an open transaction, excluding `pids`. */
-export async function idleInTransaction(db: Db, pids: number[] = []): Promise<number> {
+/** Backends in this database sitting idle inside an open transaction. */
+export async function idleInTransaction(db: Db): Promise<number> {
   const result = await db.execute(sql`
     SELECT count(*)::int AS n FROM pg_stat_activity
-    WHERE state = 'idle in transaction' AND datname = current_database()
-      AND pid <> ALL(${`{${pids.join(',')}}`}::int[])`);
+    WHERE state = 'idle in transaction' AND datname = current_database()`);
   return countSchema.parse(result.rows)[0].n;
 }

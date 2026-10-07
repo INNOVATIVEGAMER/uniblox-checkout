@@ -1,7 +1,6 @@
 import { and, eq, sql } from 'drizzle-orm';
 import type { Db } from '../../db/client';
 import { carts, orderItems, orders, products } from '../../db/schema';
-import { AppError } from '../../errors';
 import { lockProducts } from '../products/lock';
 import type { Resolution } from './gateway';
 
@@ -21,7 +20,7 @@ export function finalizeOrder(db: Db, orderId: string, resolution: Resolution): 
   return db.transaction(
     async (tx) => {
       const [order] = await tx.select({ cartId: orders.cartId }).from(orders).where(eq(orders.id, orderId));
-      if (!order) throw new AppError('ORDER_NOT_FOUND');
+      if (!order) throw new Error(`order ${orderId} to finalize has no row`);
       await tx.select({ id: carts.id }).from(carts).where(eq(carts.id, order.cartId)).for('no key update');
 
       const claimed = await tx

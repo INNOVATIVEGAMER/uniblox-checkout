@@ -269,9 +269,6 @@ _Further decisions arrive with the issues that make them:_
 - Coupon generation and the advisory lock: #4.
 - Holding unknown payment outcomes: #5.
 - The report snapshot: #6.
-- Coupon generation and the advisory lock: #4.
-- Holding unknown payment outcomes: #5.
-- The report snapshot: #6.
 
 ## Transaction, concurrency and idempotency strategy
 

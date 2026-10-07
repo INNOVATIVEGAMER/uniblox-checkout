@@ -3,8 +3,7 @@ import { eq } from 'drizzle-orm';
 import type { Tx } from '../../db/client';
 import { idempotencyKeys } from '../../db/schema';
 import { AppError, toErrorBody } from '../../errors';
-
-export type CheckoutInput = { cartId: string; expectedTotalPaise: number; paymentToken: string };
+import type { CheckoutInput } from './input';
 
 /** Hashes the parsed and normalised request, so a key reused with any other cart, total or token is a mismatch. */
 export function requestHash({ cartId, expectedTotalPaise, paymentToken }: CheckoutInput): string {
