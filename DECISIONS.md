@@ -492,6 +492,41 @@ Config validation refuses to start unless `PAYMENT_PENDING_TTL_SECONDS` is at le
 - Neither the isolation level nor `READ ONLY` is proven by a test: no test commits a checkout between the report's queries. Both fail no test when removed (see the mutation log).
 - Each call scans every order. Counters kept by `finalizeOrder` or a read replica fix that at scale; both are deferred.
 
+### Decision: Demo frontend: rewrite proxy, client-only, zod at the fetch boundary
+
+**Context:** the brief makes a frontend optional, and says it must not stand in for the backend. Its one job here is to let a reviewer trigger every backend behaviour from a browser: retries, double submits, declines, unknown payment outcomes, coupon contention, price changes and the report. A screen that hid what the API returned would defeat that job.
+
+**Options considered:**
+
+- **CORS on Hono,** with the browser calling `:3000` directly.
+- **Hono RPC (`hc<AppType>`),** which types the client from the server's routes.
+- **A Server Actions backend-for-frontend,** where Next calls the API on the server.
+- **A Next `rewrites` proxy,** with every page a client component that calls `/api/*`.
+
+**Choice:**
+
+- `web/` is a separate Next.js 16 package with its own lockfile, outside the root's lint, typecheck and tests.
+- `next.config.ts` rewrites `/api/:path*` to `API_URL`. Every page is `'use client'` and fetches through TanStack Query.
+- `web/lib/api.ts` has one `request()` helper and a zod schema for every response body. A response in the error envelope becomes an `ApiError` with `status`, `code`, `message`, `details` and `replayed`. Anything else that fails, such as the proxy's plain-text 500 when the API is down, is a plain `Error` with the raw text. The client never invents an error code.
+- A response panel shows the latest call that changed something (method, path, status, `Idempotency-Key`, `Idempotent-Replayed`, `Retry-After`, raw body) and a one-line list of the last ten calls.
+- Every settled mutation invalidates every query. Queries don't retry, and don't refetch on window focus.
+
+**Why:**
+
+- **The proxy keeps one origin,** so the backend needs no CORS change and the browser's network tab shows every call as the API answered it.
+- **Hono RPC** would make `web/` compile against `src/`, which needs a shared package or path mapping, and would skip the boundary parse this repo uses everywhere else.
+- **Server Actions** would move the calls to the server, out of the network tab, which is the opposite of a demo of the API.
+- **Invalidating everything** costs a few GETs per click on five screens. Per-mutation key lists are easy to get wrong: a declined checkout is a 402 that has still released stock and its coupon, so a success-only list would leave the shop stale.
+- **No focus refetch** keeps the cart showing the total the customer last saw. That is the total checkout sends as `expectedTotalPaise`, so a price changed from another tab produces `PRICE_CHANGED`, as it would for a real customer.
+- **No retries,** so a 404 or 409 shows at once, and the response panel isn't filled with repeats.
+
+**Consequences:**
+
+- No frontend tests. The brief grades backend tests, and the walkthrough in the README is the check.
+- The zod schemas restate the backend's response shapes. If a backend shape changes, the UI shows a parse error naming the field, not wrong data.
+- `API_URL` is read when `next dev` or `next build` starts.
+- The cart id lives in `localStorage`, or in memory when storage is blocked.
+
 ## Transaction, concurrency and idempotency strategy
 
 Checkout is one request in three phases (see "Atomic phases, not an outbox"):

@@ -38,6 +38,42 @@ Every variable is optional. The defaults match `docker-compose.yml`.
 
 The service refuses to start if any value breaks its rule.
 
+## Demo UI
+
+`web/` is a small Next.js app that drives the API from a browser. It is a thin client: a panel on every page shows the latest call's method, path, status, `Idempotency-Key`, `Idempotent-Replayed`, `Retry-After` and raw JSON body, and every error is shown as the API's `code`, `message` and `details`. Its choices are in [`DECISIONS.md`](DECISIONS.md) ("Demo frontend").
+
+Start the API with settings that make the demo fit in two minutes. Leave it running for the whole walkthrough: the fake gateway keeps its charges in memory, so a restart turns a timed-out approved payment into an abandoned one.
+
+```sh
+COUPON_EVERY_N_ORDERS=1 GATEWAY_TIMEOUT_MS=1000 PAYMENT_PENDING_TTL_SECONDS=10 pnpm dev
+```
+
+- `COUPON_EVERY_N_ORDERS=1` makes every paid order a coupon milestone.
+- `PAYMENT_PENDING_TTL_SECONDS=10` lets reconcile resolve a pending payment after 10 seconds. `GATEWAY_TIMEOUT_MS=1000` is there only because the TTL must be at least 10 × the gateway timeout. The fake gateway never actually waits.
+
+Then, in another terminal:
+
+```sh
+cd web
+pnpm install
+pnpm dev        # http://localhost:3001
+```
+
+The app proxies `/api/*` to `API_URL` (default `http://localhost:3000`), read when `pnpm dev` starts. A 500 with no error envelope means the API isn't running. In `web/`, `pnpm typecheck`, `pnpm lint` and `pnpm build` run the static checks.
+
+### Walkthrough
+
+Start from a clean database (`pnpm db:seed` resets the products).
+
+1. **No milestone yet.** Admin → Coupons → Generate: `409 NO_ELIGIBLE_MILESTONE` with `details.paidOrders` and `nextMilestoneAt`.
+2. **Happy path.** Shop: add a mouse, pay with `pm_card_visa`: `201`, the order is paid. Generate a coupon: `201` with `remainingEligible: 0`.
+3. **Retry and double submit.** Press **Retry same key**: the same order, `Idempotent-Replayed: true`. Press **Change body, same key**: `422 IDEMPOTENCY_KEY_REUSED`. New cart, add a cable, **Double submit**: two results with the same order ID, one of them replayed.
+4. **Coupon.** New cart, add a keyboard, apply the coupon: the preview shows the discount. Pay: `201`. The order page shows the frozen unit prices, the coupon, the discount and the total. Apply the same code on a new cart: `409 COUPON_ALREADY_REDEEMED`. A made-up code gives `422 COUPON_INVALID`.
+5. **Decline.** Admin → Coupons → Generate another coupon. New cart, add a lamp, apply that coupon, pay with `pm_card_chargeDeclined`: `402 PAYMENT_FAILED`, and the lamp's stock and the coupon are released (Products and Coupons show it). The cart is open again, so you can pay with a new attempt.
+6. **Unknown outcome.** On that cart, with the coupon, pay with `tok_timeout_approved`: `202` with `Retry-After: 5`, and the cart is `pending_payment`. On a new cart with a cable, the same coupon previews `409 COUPON_RESERVED`. Wait 10 seconds without touching the shop (any cart change on that product or coupon would resolve it first), then Admin → Reconcile: the order is resolved as `paid`, and the coupon is `redeemed`.
+7. **Price change.** New cart, add a cable. Open Admin in a **second tab** and change the cable's price. Back in the first tab, which still shows the old total, pay: `409 PRICE_CHANGED` with the current breakdown in `details`. The cart refreshes, and a new attempt succeeds. Dropping the stock below the cart's quantity instead gives `409 INSUFFICIENT_STOCK`.
+8. **Report.** Admin → Report: net revenue equals the sum of the totals in Orders filtered by `paid`, and redeemed coupons equal paid orders with a coupon.
+
 ## API
 
 JSON over HTTP. Money is always an integer number of paise (INR), in fields named `*Paise`. A request with a body must send `Content-Type: application/json`. Routes under `/admin` are administrative. They are unauthenticated by design, because the brief allows it.
