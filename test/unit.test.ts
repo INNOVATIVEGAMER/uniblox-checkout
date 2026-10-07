@@ -120,7 +120,7 @@ describe('withCleanup', () => {
   it('reports every cleanup failure when more than one fails', async () => {
     const err: unknown = await withCleanup(ok, fail('release'), fail('end')).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(AggregateError);
-    expect(err instanceof AggregateError && err.errors.map((e: Error) => e.message)).toEqual(['release', 'end']);
+    expect(err).toMatchObject({ errors: [{ message: 'release' }, { message: 'end' }] });
   });
 });
 
