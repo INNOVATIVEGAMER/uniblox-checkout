@@ -5,9 +5,11 @@ import { idempotencyKeys } from '../../db/schema';
 import { AppError, toErrorBody } from '../../errors';
 import type { CheckoutInput } from './input';
 
-/** Hashes the parsed and normalised request, so a key reused with any other cart, total or token is a mismatch. */
-export function requestHash({ cartId, expectedTotalPaise, paymentToken }: CheckoutInput): string {
-  return createHash('sha256').update(JSON.stringify([cartId, expectedTotalPaise, paymentToken])).digest('hex');
+/** Hashes the parsed and normalised request, so a key reused with any other cart, coupon, total or token is a mismatch. */
+export function requestHash({ cartId, couponCode, expectedTotalPaise, paymentToken }: CheckoutInput): string {
+  return createHash('sha256')
+    .update(JSON.stringify([cartId, couponCode ?? null, expectedTotalPaise, paymentToken]))
+    .digest('hex');
 }
 
 export type Claim =

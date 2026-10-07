@@ -1,13 +1,19 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
+import { SEED_PRODUCTS } from '../src/db/seed';
+import { discount } from '../src/domain/money';
 import { COUPON_GENERATION_LOCK, generateCoupon as generateCouponDirect } from '../src/modules/coupons/service';
+import { FakeGateway } from '../src/modules/payments/fake-gateway';
 import { createTestApp } from './helpers/app';
-import { barrier } from './helpers/barrier';
+import { barrier, lineUp } from './helpers/barrier';
 import { cartRequests } from './helpers/carts';
-import { newKey, postCheckout, throwingGateway, visa } from './helpers/checkout';
-import { couponSchema, generateCoupon, generatedSchema, payOrders } from './helpers/coupons';
+import { expectOrder, idleInTransaction, newKey, orderCount, postCheckout, throwingGateway, visa } from './helpers/checkout';
+import { withCleanup } from './helpers/cleanup';
+import { couponRow, couponSchema, generateCoupon, generatedSchema, insertCoupon, payOrders } from './helpers/coupons';
 import { resetDb } from './helpers/db';
 import { expectError } from './helpers/errors';
+import { gated } from './helpers/gate';
+import { firstFulfilled, within } from './helpers/within';
 
 const N = 2;
 const { app, appWith, db, pool, config } = createTestApp({ COUPON_EVERY_N_ORDERS: String(N) });
@@ -115,5 +121,101 @@ describe('GET /admin/coupons', () => {
     const second = await expectGenerated(await generateCoupon(app));
 
     expect(await listCoupons()).toEqual([first.coupon, second.coupon]);
+  });
+});
+
+const withTenPercent = (pricePaise: number) => pricePaise - discount(pricePaise, 10);
+
+describe('T6 five carts with no product in common race for one coupon, behind a coupon barrier, gated', () => {
+  it('gives 4 × 409 COUPON_RESERVED while the coupon is reserved, then one 201, and the coupon is redeemed for good', async () => {
+    const coupon = await insertCoupon(db);
+    const gate = gated(new FakeGateway(), { at: 'before' });
+    const gatedApp = appWith(gate.gateway);
+    const carts = await Promise.all(
+      SEED_PRODUCTS.map(async ({ id, pricePaise }) => ({ cartId: await cartWith({ [id]: 1 }), total: withTenPercent(pricePaise) })),
+    );
+    const send = (cart: (typeof carts)[number], key: string) =>
+      postCheckout(gatedApp, cart.cartId, key, { ...visa(cart.total), couponCode: coupon.code });
+    let requests: Promise<{ cart: (typeof carts)[number]; key: string; res: Response }>[] = [];
+
+    await withCleanup(
+      async () => {
+        requests = await lineUp(
+          { table: 'coupons', id: coupon.id },
+          5,
+          () =>
+            carts.map(async (cart) => {
+              const key = newKey();
+              return { cart, key, res: await send(cart, key) };
+            }),
+          async () => gate.release(),
+        );
+        await gate.entered();
+        const losers = await within(firstFulfilled(requests, 4), 'the 4 losers did not settle');
+        for (const { res } of losers) {
+          expect(res.headers.get('Idempotent-Replayed')).toBeNull();
+          await expectError(res, 409, 'COUPON_RESERVED');
+        }
+        expect(await couponRow(db, coupon.code)).toEqual({ status: 'reserved', redeemedAt: null });
+        expect(await idleInTransaction(db)).toBe(0);
+
+        gate.release();
+        const winner = (await Promise.all(requests)).find((request) => !losers.includes(request));
+        if (!winner) throw new Error('no winner');
+        const paid = await expectOrder(winner.res, 201);
+        expect(paid).toMatchObject({ coupon: { code: coupon.code, percentOff: 10 }, totalPaise: winner.cart.total });
+        expect(await couponRow(db, coupon.code)).toEqual({ status: 'redeemed', redeemedAt: expect.any(Date) });
+
+        const [loser] = losers;
+        if (!loser) throw new Error('no loser');
+        const retried = await send(loser.cart, loser.key);
+        expect(retried.headers.get('Idempotent-Replayed')).toBeNull();
+        await expectError(retried, 409, 'COUPON_ALREADY_REDEEMED');
+        const replayed = await send(loser.cart, loser.key);
+        expect(replayed.headers.get('Idempotent-Replayed')).toBe('true');
+        await expectError(replayed, 409, 'COUPON_ALREADY_REDEEMED');
+
+        const freshCart = await cartWith({ p_keyboard: 1 });
+        const fresh = await postCheckout(app, freshCart, newKey(), { ...visa(withTenPercent(499_900)), couponCode: coupon.code });
+        await expectError(fresh, 409, 'COUPON_ALREADY_REDEEMED');
+
+        expect(await orderCount(db)).toBe(1);
+        expect(gate.calls).toBe(1);
+      },
+      async () => gate.release(),
+      () => Promise.allSettled(requests),
+    );
+  });
+});
+
+describe('T19 a 100% coupon', () => {
+  it('pays a zero total without calling the gateway, with no payment reference, and redeems the coupon', async () => {
+    const full = createTestApp({ COUPON_EVERY_N_ORDERS: String(N), COUPON_PERCENT_OFF: '100' });
+    const gate = gated(new FakeGateway(), { at: 'before' });
+
+    await withCleanup(
+      async () => {
+        await payOrders(full.app, N);
+        const { coupon } = await expectGenerated(await generateCoupon(full.app));
+        expect(coupon.percentOff).toBe(100);
+        const cartId = await cartWith({ p_cable: 3 });
+
+        const res = await postCheckout(full.appWith(gate.gateway), cartId, newKey(), { ...visa(0), couponCode: coupon.code });
+
+        const order = await expectOrder(res, 201);
+        expect(order).toMatchObject({
+          status: 'paid',
+          subtotalPaise: 3 * 34_999,
+          discountPaise: 3 * 34_999,
+          totalPaise: 0,
+          paymentRef: null,
+          coupon: { code: coupon.code, percentOff: 100 },
+        });
+        expect(gate.calls).toBe(0);
+        expect(await couponRow(db, coupon.code)).toEqual({ status: 'redeemed', redeemedAt: expect.any(Date) });
+      },
+      async () => gate.release(),
+      () => full.pool.end(),
+    );
   });
 });

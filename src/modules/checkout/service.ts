@@ -1,10 +1,11 @@
 import { and, asc, eq, sql } from 'drizzle-orm';
 import type { Config } from '../../config';
 import type { Db, Tx } from '../../db/client';
-import { cartItems, carts, idempotencyKeys, orderItems, orders, products } from '../../db/schema';
+import { cartItems, carts, coupons, idempotencyKeys, orderItems, orders, products } from '../../db/schema';
 import { priceLines } from '../../domain/money';
 import { AppError } from '../../errors';
 import { lockOpenCart } from '../carts/service';
+import { lockAvailableCoupon } from '../coupons/service';
 import { type CheckoutResponse, loadOrderView, toCheckoutResponse } from '../orders/view';
 import { finalizeOrder } from '../payments/finalize';
 import type { PaymentGateway, Resolution } from '../payments/gateway';
@@ -43,7 +44,7 @@ export async function reservePhase(db: Db, input: CheckoutInput, key: string, ha
   return outcome;
 }
 
-async function reserve(sp: Tx, { cartId, expectedTotalPaise }: CheckoutInput, key: string): Promise<ReservedOrder> {
+async function reserve(sp: Tx, { cartId, couponCode, expectedTotalPaise }: CheckoutInput, key: string): Promise<ReservedOrder> {
   await lockOpenCart(sp, cartId);
 
   const lines = await sp
@@ -65,7 +66,8 @@ async function reserve(sp: Tx, { cartId, expectedTotalPaise }: CheckoutInput, ke
     .map((item) => ({ productId: item.productId, requested: item.quantity, available: item.stock }));
   if (short.length > 0) throw new AppError('INSUFFICIENT_STOCK', short);
 
-  const priced = priceLines(items);
+  const coupon = couponCode === undefined ? null : await lockAvailableCoupon(sp, couponCode);
+  const priced = priceLines(items, coupon?.percentOff ?? null);
   if (expectedTotalPaise !== priced.totalPaise) {
     const { subtotalPaise, discountPaise, totalPaise } = priced;
     throw new AppError('PRICE_CHANGED', { subtotalPaise, discountPaise, totalPaise });
@@ -78,7 +80,14 @@ async function reserve(sp: Tx, { cartId, expectedTotalPaise }: CheckoutInput, ke
     .where(and(eq(cartItems.cartId, cartId), eq(cartItems.productId, products.id)));
   const [order] = await sp
     .insert(orders)
-    .values({ cartId, subtotalPaise: priced.subtotalPaise, discountPaise: priced.discountPaise, totalPaise: priced.totalPaise })
+    .values({
+      cartId,
+      subtotalPaise: priced.subtotalPaise,
+      discountPaise: priced.discountPaise,
+      totalPaise: priced.totalPaise,
+      couponId: coupon?.id ?? null,
+      percentOff: coupon?.percentOff ?? null,
+    })
     .returning({ id: orders.id, totalPaise: orders.totalPaise });
   if (!order) throw new Error('INSERT … RETURNING produced no row');
   await sp.insert(orderItems).values(
@@ -91,6 +100,7 @@ async function reserve(sp: Tx, { cartId, expectedTotalPaise }: CheckoutInput, ke
       lineTotalPaise: line.lineTotalPaise,
     })),
   );
+  if (coupon) await sp.update(coupons).set({ status: 'reserved' }).where(eq(coupons.id, coupon.id));
   await sp.update(carts).set({ status: 'pending_payment' }).where(eq(carts.id, cartId));
   await sp.update(idempotencyKeys).set({ orderId: order.id }).where(eq(idempotencyKeys.key, key));
   return order;

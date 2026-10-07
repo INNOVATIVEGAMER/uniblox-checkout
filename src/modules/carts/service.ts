@@ -24,7 +24,10 @@ async function toCartView(db: Db | Tx, cart: Cart) {
     .where(eq(cartItems.cartId, cart.id))
     .orderBy(asc(cartItems.productId));
 
-  const priced = priceLines(rows.map(({ stock, ...line }) => ({ ...line, available: stock >= line.quantity })));
+  const priced = priceLines(
+    rows.map(({ stock, ...line }) => ({ ...line, available: stock >= line.quantity })),
+    null,
+  );
   return { id: cart.id, status: cart.status, orderId: cart.orderId, ...priced };
 }
 

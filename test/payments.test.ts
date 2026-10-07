@@ -14,6 +14,7 @@ import {
   visa,
 } from './helpers/checkout';
 import { withCleanup } from './helpers/cleanup';
+import { couponRow, insertCoupon } from './helpers/coupons';
 import { resetDb } from './helpers/db';
 import { expectError } from './helpers/errors';
 import { gated } from './helpers/gate';
@@ -91,6 +92,38 @@ describe('T13 a declined payment', () => {
     expect(paid.id).not.toBe(orderId);
     expect(await stockOf(db, 'p_lamp')).toBe(2);
     expect(await getCart(cartId)).toMatchObject({ status: 'checked_out', orderId: paid.id });
+  });
+});
+
+describe('T13 a declined payment with a coupon', () => {
+  it('holds the coupon while pending, releases it on the decline, and a new key redeems it', async () => {
+    const coupon = await insertCoupon(db);
+    const gate = gated(new FakeGateway(), { at: 'before' });
+    const cartId = await cartWith({ p_lamp: 1 });
+    const total = LAMP_PAISE - 24_990;
+    const key = newKey();
+    const pending = postCheckout(appWith(gate.gateway), cartId, key, { ...declined(total), couponCode: coupon.code });
+
+    const res = await withCleanup(
+      async () => {
+        await gate.entered();
+        expect(await couponRow(db, coupon.code)).toEqual({ status: 'reserved', redeemedAt: null });
+        gate.release();
+        return pending;
+      },
+      async () => gate.release(),
+      () => Promise.allSettled([pending]),
+    );
+
+    await expectError(res, 402, 'PAYMENT_FAILED');
+    expect(await couponRow(db, coupon.code)).toEqual({ status: 'available', redeemedAt: null });
+    expect(await stockOf(db, 'p_lamp')).toBe(3);
+
+    await expectError(await postCheckout(app, cartId, key, declined(total)), 422, 'IDEMPOTENCY_KEY_REUSED');
+
+    const paid = await expectOrder(await postCheckout(app, cartId, newKey(), { ...visa(total), couponCode: coupon.code }), 201);
+    expect(paid).toMatchObject({ discountPaise: 24_990, totalPaise: total, coupon: { code: coupon.code, percentOff: 10 } });
+    expect(await couponRow(db, coupon.code)).toEqual({ status: 'redeemed', redeemedAt: expect.any(Date) });
   });
 });
 

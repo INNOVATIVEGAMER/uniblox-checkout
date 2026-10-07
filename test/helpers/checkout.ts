@@ -24,6 +24,7 @@ export const orderViewSchema = z.strictObject({
   subtotalPaise: z.int(),
   discountPaise: z.int(),
   totalPaise: z.int(),
+  coupon: z.strictObject({ code: z.string(), percentOff: z.int() }).nullable(),
   paymentRef: z.string().nullable(),
   failureReason: z.string().nullable(),
   createdAt: z.iso.datetime(),

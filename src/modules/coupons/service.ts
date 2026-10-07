@@ -1,6 +1,6 @@
 import { eq, sql } from 'drizzle-orm';
 import type { Config } from '../../config';
-import type { Db } from '../../db/client';
+import type { Db, Tx } from '../../db/client';
 import { coupons, orders } from '../../db/schema';
 import { milestoneProgress } from '../../domain/milestones';
 import { AppError } from '../../errors';
@@ -21,6 +21,19 @@ export const couponColumns = {
   createdAt: coupons.createdAt,
   redeemedAt: coupons.redeemedAt,
 };
+
+/** The availability rule shared by checkout and the cart preview, so both return the same error. */
+export function availableCoupon<Coupon extends { status: typeof coupons.$inferSelect.status }>(coupon: Coupon | undefined): Coupon {
+  if (!coupon) throw new AppError('COUPON_INVALID');
+  if (coupon.status === 'redeemed') throw new AppError('COUPON_ALREADY_REDEEMED');
+  if (coupon.status === 'reserved') throw new AppError('COUPON_RESERVED');
+  return coupon;
+}
+
+export async function lockAvailableCoupon(tx: Tx, code: string) {
+  const [coupon] = await tx.select(couponColumns).from(coupons).where(eq(coupons.code, code)).for('no key update');
+  return availableCoupon(coupon);
+}
 
 /**
  * Generates one coupon, for the oldest unrewarded milestone. The advisory lock queues concurrent calls,

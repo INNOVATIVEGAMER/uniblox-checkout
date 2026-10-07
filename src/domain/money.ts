@@ -16,9 +16,9 @@ export function total(subtotalPaise: number, discountPaise: number): number {
   return subtotalPaise - discountPaise;
 }
 
-export function priceLines<Line extends { unitPricePaise: number; quantity: number }>(lines: Line[]) {
+export function priceLines<Line extends { unitPricePaise: number; quantity: number }>(lines: Line[], percentOff: number | null) {
   const priced = lines.map((line) => ({ ...line, lineTotalPaise: lineTotal(line.unitPricePaise, line.quantity) }));
   const subtotalPaise = priced.reduce((sum, line) => sum + line.lineTotalPaise, 0);
-  const discountPaise = 0;
+  const discountPaise = percentOff === null ? 0 : discount(subtotalPaise, percentOff);
   return { lines: priced, subtotalPaise, discountPaise, totalPaise: total(subtotalPaise, discountPaise) };
 }

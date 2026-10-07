@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { carts, idempotencyKeys, products } from '../src/db/schema';
+import { carts, coupons, idempotencyKeys, products } from '../src/db/schema';
 import type { ErrorCode } from '../src/errors';
 import { FakeGateway } from '../src/modules/payments/fake-gateway';
 import { createTestApp, sendJson } from './helpers/app';
@@ -18,6 +18,7 @@ import {
   visa,
 } from './helpers/checkout';
 import { withCleanup } from './helpers/cleanup';
+import { couponRow, insertCoupon } from './helpers/coupons';
 import { resetDb, snapshotDb } from './helpers/db';
 import { errorBodySchema, expectError } from './helpers/errors';
 import { gated } from './helpers/gate';
@@ -72,6 +73,16 @@ describe('T20 storage rule: final codes store the response and replay it', () =>
     ],
     ['PRICE_CHANGED', 409, async () => ({ cartId: await cartWith({ p_mouse: 1 }), body: visa(MOUSE_PAISE - 1) })],
     ['CART_EMPTY', 422, async () => ({ cartId: await newCart(), body: visa(0) })],
+    ['COUPON_INVALID', 422, async () => ({ cartId: await cartWith({ p_mouse: 1 }), body: { ...visa(MOUSE_PAISE), couponCode: 'SAVE10-NOPE' } })],
+    [
+      'COUPON_ALREADY_REDEEMED',
+      409,
+      async () => {
+        const coupon = await insertCoupon(db);
+        await db.update(coupons).set({ status: 'redeemed', redeemedAt: new Date() }).where(eq(coupons.id, coupon.id));
+        return { cartId: await cartWith({ p_mouse: 1 }), body: { ...visa(MOUSE_PAISE - 12_995), couponCode: coupon.code } };
+      },
+    ],
   ])('%s (%i)', async (code, status, setup) => {
     const { cartId, body } = await setup();
     await expectStoredFinal(cartId, newKey(), body, status, code);
@@ -134,6 +145,27 @@ describe('T20 storage rule: transient codes and 400s leave no key row', () => {
         const res = await postCheckout(gatedApp, cartId, key, visa(MOUSE_PAISE));
         expect(res.headers.get('Idempotent-Replayed')).toBeNull();
         await expectError(res, 409, 'CART_PAYMENT_PENDING');
+        expect(await keyRow(db, key)).toBeUndefined();
+      },
+      async () => gate.release(),
+      () => Promise.allSettled([first]),
+    );
+  });
+
+  it('COUPON_RESERVED stores nothing for the second cart', async () => {
+    const coupon = await insertCoupon(db);
+    const gate = gated(new FakeGateway(), { at: 'before' });
+    const gatedApp = appWith(gate.gateway);
+    const total = MOUSE_PAISE - 12_995;
+    const first = postCheckout(gatedApp, await cartWith({ p_mouse: 1 }), newKey(), { ...visa(total), couponCode: coupon.code });
+
+    await withCleanup(
+      async () => {
+        await gate.entered();
+        const key = newKey();
+        const res = await postCheckout(gatedApp, await cartWith({ p_mouse: 1 }), key, { ...visa(total), couponCode: coupon.code });
+        expect(res.headers.get('Idempotent-Replayed')).toBeNull();
+        await expectError(res, 409, 'COUPON_RESERVED');
         expect(await keyRow(db, key)).toBeUndefined();
       },
       async () => gate.release(),
@@ -217,11 +249,30 @@ describe('T22 a stock failure consumes nothing', () => {
   });
 });
 
+describe('T22 a stock failure with a coupon', () => {
+  it('leaves the coupon available, replays 409, and a new key redeems it after a restock', async () => {
+    const coupon = await insertCoupon(db);
+    const cartId = await cartWith({ p_lamp: 2 });
+    await patchProduct('p_lamp', { stock: 1 });
+    const body = { ...visa(2 * LAMP_PAISE - 49_980), couponCode: coupon.code };
+    const key = newKey();
+
+    await expectStoredFinal(cartId, key, body, 409, 'INSUFFICIENT_STOCK');
+    expect(await couponRow(db, coupon.code)).toEqual({ status: 'available', redeemedAt: null });
+    expect(await orderCount(db)).toBe(0);
+
+    await patchProduct('p_lamp', { stock: 3 });
+    const paid = await expectOrder(await postCheckout(app, cartId, newKey(), body), 201);
+    expect(paid.coupon).toEqual({ code: coupon.code, percentOff: 10 });
+  });
+});
+
 describe('T4 one key, different requests', () => {
   it.each([
     ['another cart', async () => ({ cartId: await cartWith({ p_mouse: 1 }), body: visa(MOUSE_PAISE) })],
     ['another total', async (cartId: string) => ({ cartId, body: visa(MOUSE_PAISE + 1) })],
     ['another token', async (cartId: string) => ({ cartId, body: { expectedTotalPaise: MOUSE_PAISE, paymentToken: 'pm_card_chargeDeclined' } })],
+    ['a coupon', async (cartId: string) => ({ cartId, body: { ...visa(MOUSE_PAISE), couponCode: 'SAVE10-ANY' } })],
   ])('the same key with %s gets 422 IDEMPOTENCY_KEY_REUSED and leaves the key row unchanged', async (_label, other) => {
     const cartId = await cartWith({ p_mouse: 1 });
     const key = newKey();
@@ -240,6 +291,17 @@ describe('T4 one key, different requests', () => {
     const paid = await expectOrder(await postCheckout(app, cartId, key, visa(MOUSE_PAISE)), 201);
 
     const replay = await postCheckout(app, cartId.toUpperCase(), key, visa(MOUSE_PAISE));
+    expect(await expectOrder(replay, 201, { replayed: true })).toEqual(paid);
+  });
+
+  it('the same key with the lowercase form of the coupon code replays instead of returning 422', async () => {
+    const coupon = await insertCoupon(db);
+    const cartId = await cartWith({ p_mouse: 1 });
+    const key = newKey();
+    const body = { ...visa(MOUSE_PAISE - 12_995), couponCode: coupon.code };
+    const paid = await expectOrder(await postCheckout(app, cartId, key, body), 201);
+
+    const replay = await postCheckout(app, cartId, key, { ...body, couponCode: `  ${coupon.code.toLowerCase()} ` });
     expect(await expectOrder(replay, 201, { replayed: true })).toEqual(paid);
   });
 
