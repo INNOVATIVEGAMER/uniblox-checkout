@@ -19,7 +19,8 @@ function untilReleased(released: Promise<void>, signal: AbortSignal): Promise<vo
 
 /**
  * Holds every charge until release(): `before` holds it before the inner gateway records the charge,
- * `after` holds it once the charge is recorded. A held charge still aborts on its signal.
+ * `after` holds it once the charge is recorded. A held charge still aborts on its signal. retrieve()
+ * and cancel() pass straight through, so recovery can run while a charge is held.
  */
 export function gated(inner: PaymentGateway, { at }: { at: 'before' | 'after' }): Gate {
   let markEntered = () => {};
@@ -40,6 +41,8 @@ export function gated(inner: PaymentGateway, { at }: { at: 'before' | 'after' })
       await untilReleased(released, signal);
       return result;
     },
+    retrieve: (orderId) => inner.retrieve(orderId),
+    cancel: (orderId) => inner.cancel(orderId),
   };
 
   return {

@@ -8,7 +8,7 @@ import { lockOpenCart } from '../carts/service';
 import { lockAvailableCoupon } from '../coupons/service';
 import { type CheckoutResponse, loadOrderView, toCheckoutResponse } from '../orders/view';
 import { finalizeOrder } from '../payments/finalize';
-import type { PaymentGateway, Resolution } from '../payments/gateway';
+import { type PaymentGateway, type Resolution, zeroTotalResolution } from '../payments/gateway';
 import { lockProducts } from '../products/lock';
 import { type Claim, claimKey, completeKeyWithError, requestHash } from './idempotency';
 import type { CheckoutInput } from './input';
@@ -112,7 +112,7 @@ async function charge(
   order: ReservedOrder,
   paymentToken: string,
 ): Promise<Resolution | null> {
-  if (order.totalPaise === 0) return { outcome: 'approved', paymentRef: null };
+  if (order.totalPaise === 0) return zeroTotalResolution;
   try {
     return await gateway.charge(
       { orderId: order.id, amountPaise: order.totalPaise, paymentToken },
