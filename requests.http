@@ -1,0 +1,49 @@
+@base = http://localhost:3000
+
+### List products
+GET {{base}}/products
+
+### Admin: change the lamp's price and stock
+PATCH {{base}}/admin/products/p_lamp
+Content-Type: application/json
+
+{ "pricePaise": 199999, "stock": 10 }
+
+### Admin: rename a product
+PATCH {{base}}/admin/products/p_cable
+Content-Type: application/json
+
+{ "name": "Braided USB-C Cable" }
+
+### 400 VALIDATION_ERROR: an empty PATCH
+PATCH {{base}}/admin/products/p_lamp
+Content-Type: application/json
+
+{}
+
+### 400 VALIDATION_ERROR: an unknown field
+PATCH {{base}}/admin/products/p_lamp
+Content-Type: application/json
+
+{ "stock": 5, "colour": "red" }
+
+### 400 VALIDATION_ERROR: a malformed product ID
+PATCH {{base}}/admin/products/LAMP
+Content-Type: application/json
+
+{ "stock": 5 }
+
+### 400 VALIDATION_ERROR: a non-JSON Content-Type
+PATCH {{base}}/admin/products/p_lamp
+Content-Type: text/plain
+
+{ "stock": 5 }
+
+### 404 PRODUCT_NOT_FOUND
+PATCH {{base}}/admin/products/p_nope
+Content-Type: application/json
+
+{ "stock": 5 }
+
+### 404 NOT_FOUND: an unknown route
+GET {{base}}/nope
