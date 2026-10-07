@@ -179,3 +179,45 @@ Content-Type: application/json
 
 ### 404 ORDER_NOT_FOUND
 GET {{base}}/orders/0b8f2d4e-6a1c-4e3b-8d5f-7a9c1e3b5d7f
+
+### Coupon walkthrough. A coupon needs COUPON_EVERY_N_ORDERS (default 5) paid orders.
+### 409 NO_ELIGIBLE_MILESTONE until then, with { paidOrders, nextMilestoneAt }
+POST {{base}}/admin/coupons
+
+### Admin: generate a coupon for the oldest unrewarded milestone (201), once enough orders are paid
+# @name coupon
+POST {{base}}/admin/coupons
+
+### Admin: list coupons and their status
+GET {{base}}/admin/coupons
+
+### A cart with 1 cable
+# @name couponCart
+POST {{base}}/carts
+
+###
+PUT {{base}}/carts/{{couponCart.response.body.id}}/items/p_cable
+Content-Type: application/json
+
+{ "quantity": 1 }
+
+### Preview the coupon: 34999 less a floored 10% (3499) is 31500. Lowercase works too
+# @name preview
+GET {{base}}/carts/{{couponCart.response.body.id}}?couponCode={{coupon.response.body.coupon.code}}
+
+### 422 COUPON_INVALID: preview an unknown code
+GET {{base}}/carts/{{couponCart.response.body.id}}?couponCode=SAVE10-M9-NOPE0000
+
+### Redeem it (201). The total comes from the preview
+POST {{base}}/carts/{{couponCart.response.body.id}}/checkout
+Content-Type: application/json
+Idempotency-Key: coupon-walkthrough-1
+
+{
+  "expectedTotalPaise": {{preview.response.body.totalPaise}},
+  "paymentToken": "pm_card_visa",
+  "couponCode": "{{coupon.response.body.coupon.code}}"
+}
+
+### 409 COUPON_ALREADY_REDEEMED: preview the redeemed coupon
+GET {{base}}/carts/{{payCart.response.body.id}}?couponCode={{coupon.response.body.coupon.code}}
