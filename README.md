@@ -381,7 +381,7 @@ A failure on one order is logged, and the request carries on. GET requests never
 Resolves every pending order older than `PAYMENT_PENDING_TTL_SECONDS`. Younger orders are left alone. No body.
 
 **200**: `{ "resolved": [{ "orderId": "…", "status": "paid" }], "stillPending": 0 }`.
-- **`resolved`:** each order this call resolved, with its new status, `paid` or `failed`.
+- **`resolved`:** each order this call resolved, with its new status, `paid` or `failed`. An order that a concurrent call or the original request finalized first is not listed.
 - **`stillPending`:** every order still `pending_payment` afterwards. That includes orders younger than the TTL, and stale orders that couldn't be resolved, for example because the gateway errored or a lock wait timed out.
 
 A failure on one order never fails the call, so this route has no error responses.

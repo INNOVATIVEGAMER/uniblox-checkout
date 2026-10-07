@@ -3,7 +3,7 @@ import type { Config } from '../../config';
 import type { Db } from '../../db/client';
 import { coupons, orderItems, orders } from '../../db/schema';
 import { finalizeOrder } from './finalize';
-import { type PaymentGateway, type Resolution, zeroTotalResolution } from './gateway';
+import { type PaymentGateway, type PendingOrder, type Resolution, zeroTotalResolution } from './gateway';
 
 export type RecoveryDeps = {
   db: Db;
@@ -11,9 +11,6 @@ export type RecoveryDeps = {
   config: Pick<Config, 'PAYMENT_PENDING_TTL_SECONDS' | 'GATEWAY_TIMEOUT_MS'>;
 };
 
-export type PendingOrder = { id: string; totalPaise: number };
-
-/** A union, so a caller that forgets the request's filters fails to compile instead of recovering every order. */
 export type StaleScope =
   | { scope: 'all' }
   | { scope: 'request'; cartId: string; couponCode?: string; productIds: string[] };
@@ -30,7 +27,6 @@ function scopeFilter(db: Db, s: StaleScope) {
   return or(eq(orders.cartId, s.cartId), holdsCoupon, holdsProduct);
 }
 
-/** Pending orders older than the TTL, measured on the database clock. */
 export function findStalePending(db: Db, ttlSeconds: number, s: StaleScope): Promise<PendingOrder[]> {
   return db
     .select({ id: orders.id, totalPaise: orders.totalPaise })
@@ -47,31 +43,26 @@ export function findStalePending(db: Db, ttlSeconds: number, s: StaleScope): Pro
 }
 
 /** Not found means nothing landed yet, and the cancel makes sure nothing lands later, so release is safe. */
-async function resolutionFor(gateway: PaymentGateway, order: PendingOrder): Promise<Resolution> {
+async function resolutionFor({ gateway, config }: RecoveryDeps, order: PendingOrder): Promise<Resolution> {
   if (order.totalPaise === 0) return zeroTotalResolution;
-  const retrieved = await gateway.retrieve(order.id);
+  const retrieved = await gateway.retrieve(order.id, AbortSignal.timeout(config.GATEWAY_TIMEOUT_MS));
   if (retrieved.outcome !== 'not_found') return retrieved;
-  const cancelled = await gateway.cancel(order.id);
+  const cancelled = await gateway.cancel(order.id, AbortSignal.timeout(config.GATEWAY_TIMEOUT_MS));
   if (cancelled.outcome !== 'cancelled') return cancelled;
   return { outcome: 'declined', reason: 'abandoned' };
 }
 
-/** Resolves one order from the gateway's record. A gateway error propagates and leaves the order pending. */
-export async function resolvePendingOrder({ db, gateway }: Pick<RecoveryDeps, 'db' | 'gateway'>, order: PendingOrder) {
-  const resolution = await resolutionFor(gateway, order);
-  await finalizeOrder(db, order.id, resolution);
-  return resolution.outcome === 'approved' ? ('paid' as const) : ('failed' as const);
+/** A gateway error propagates and leaves the order pending. */
+export async function resolvePendingOrder(deps: RecoveryDeps, order: PendingOrder) {
+  return finalizeOrder(deps.db, order.id, await resolutionFor(deps, order));
 }
 
-/**
- * Resolves the stale orders in scope one at a time, outside any transaction, so no connection is held
- * while the gateway answers. A failure on one order is logged and leaves it pending.
- */
 export async function recoverStale(deps: RecoveryDeps, s: StaleScope) {
   const resolved: { orderId: string; status: 'paid' | 'failed' }[] = [];
   for (const order of await findStalePending(deps.db, deps.config.PAYMENT_PENDING_TTL_SECONDS, s)) {
     try {
-      resolved.push({ orderId: order.id, status: await resolvePendingOrder(deps, order) });
+      const status = await resolvePendingOrder(deps, order);
+      if (status) resolved.push({ orderId: order.id, status });
     } catch (err) {
       console.error('pending order recovery failed, order stays pending', { orderId: order.id, err });
     }

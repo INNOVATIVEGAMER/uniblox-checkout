@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { bigint, check, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { bigint, check, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { MAX_LINE_QUANTITY, MAX_UNIT_PRICE_PAISE } from '../domain/money';
 
 export const CART_STATUSES = ['open', 'pending_payment', 'checked_out'] as const;
@@ -106,6 +106,7 @@ export const orders = pgTable(
     check('orders_paid_has_payment_ref', sql`${t.status} <> 'paid' OR ${t.totalPaise} = 0 OR ${t.paymentRef} IS NOT NULL`),
     uniqueIndex('orders_live_cart_uq').on(t.cartId).where(sql`${t.status} <> 'failed'`),
     uniqueIndex('orders_live_coupon_uq').on(t.couponId).where(sql`${t.status} <> 'failed'`),
+    index('orders_pending_created_at_idx').on(t.createdAt).where(sql`${t.status} = 'pending_payment'`),
   ],
 );
 

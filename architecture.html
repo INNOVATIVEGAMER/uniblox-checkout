@@ -131,7 +131,7 @@ li { margin: 3px 0; }
   <li><strong>Stock-holding orders trigger recovery.</strong> Checkout and PUT also recover stale orders that hold a product the request needs, so a stuck payment can't cause a final <code>INSUFFICIENT_STOCK</code>.</li>
   <li><strong>The coupon preview</strong> returns the checkout error for a reserved or redeemed coupon, so it never shows a total that checkout would reject.</li>
   <li><strong>Wiring:</strong> <code>createDb(config)</code> builds the pool, and <code>createApp({ config, gateway, db })</code> passes it to router factories with explicit dependencies. Error codes are defined once, in an <code>ERRORS</code> table. Coupon codes use an uppercase alphabet and one shared schema.</li>
-  <li><strong>Failure rules:</strong> reconcile and phase 0 continue past a failure on one order. 503 is listed on every route that can wait on a lock. The real-PSP mapping creates the PaymentIntent before confirming it.</li>
+  <li><strong>Failure rules:</strong> reconcile and phase 0 continue past a failure on one order. 503 is listed on every route where a lock wait can fail the request. The real-PSP mapping creates the PaymentIntent before confirming it.</li>
   <li><strong>Tests:</strong>
     <ul>
       <li>The lock timeout is long by default, and only T15 and T17 use a short one.</li>
@@ -220,6 +220,7 @@ orders
 
 CREATE UNIQUE INDEX orders_live_cart_uq   ON orders (cart_id)   WHERE status &lt;&gt; 'failed';
 CREATE UNIQUE INDEX orders_live_coupon_uq ON orders (coupon_id) WHERE status &lt;&gt; 'failed';
+CREATE INDEX orders_pending_created_at_idx ON orders (created_at) WHERE status = 'pending_payment';
 
 order_items
   order_id          uuid FK -&gt; orders
@@ -303,7 +304,7 @@ idempotency_keys
 <tr><td class="m GET">GET <span class="tag admin">admin</span></td><td><code>/admin/coupons</code></td><td>List coupons and their status</td><td>200</td><td>None</td></tr>
 <tr><td class="m GET">GET <span class="tag admin">admin</span></td><td><code>/admin/orders?status=</code></td><td>List order views, optionally filtered by status, so the report can be reconciled</td><td>200</td><td>400 VALIDATION_ERROR</td></tr>
 <tr><td class="m GET">GET <span class="tag admin">admin</span></td><td><code>/admin/report</code></td><td>Sales and coupon summary</td><td>200</td><td>None</td></tr>
-<tr><td class="m POST">POST <span class="tag admin">admin</span></td><td><code>/admin/payments/reconcile</code></td><td>Resolve every pending order older than the TTL</td><td>200 <code>{ resolved: [{ orderId, status }], stillPending }</code></td><td>503 LOCK_TIMEOUT</td></tr>
+<tr><td class="m POST">POST <span class="tag admin">admin</span></td><td><code>/admin/payments/reconcile</code></td><td>Resolve every pending order older than the TTL</td><td>200 <code>{ resolved: [{ orderId, status }], stillPending }</code></td><td>None. A lock timeout on one order leaves it in <code>stillPending</code></td></tr>
 <tr><td class="m PATCH">PATCH <span class="tag admin">admin</span></td><td><code>/admin/products/:id</code></td><td>Change <code>pricePaise</code>, <code>name</code> or <code>stock</code>. The schema is strict and needs at least one field. <code>stock</code> means stock available to sell, so reserved units are not included</td><td>200</td><td>400 VALIDATION_ERROR, 404 PRODUCT_NOT_FOUND, 503 LOCK_TIMEOUT</td></tr>
 </table></div>
 
@@ -440,7 +441,7 @@ if (outcome.kind === 'rejected') throw outcome.error;   // after COMMIT</code></
 <p>A pending order can come from an unknown outcome (a 202), from a crash between reserve and finalize, or from a phase 3 failure. In each case it holds stock and maybe a coupon. Once it is older than <code>PAYMENT_PENDING_TTL_SECONDS</code> (compared with <code>now()</code> in SQL against <code>orders.created_at</code>), <code>resolvePendingOrder(orderId)</code> can resolve it:</p>
 <ol class="steps">
   <li data-n="1"><strong>Zero total:</strong> the order was never going to be charged, so resolve it as <em>approved</em> without calling the gateway.</li>
-  <li data-n="2"><strong>Otherwise, ask the gateway:</strong> <code>gateway.retrieve(orderId)</code>, outside any transaction.
+  <li data-n="2"><strong>Otherwise, ask the gateway:</strong> <code>gateway.retrieve(orderId)</code>, outside any transaction. Each gateway call here is bounded by <code>GATEWAY_TIMEOUT_MS</code>, and a timeout leaves the order pending.
     <div class="fail"><strong>Approved or declined:</strong> that is the resolution.<br>
     <strong>Not found:</strong> call <code>gateway.cancel(orderId)</code>. It returns <em>cancelled</em>, and from then on any late <code>charge()</code> for this order is declined. Or, if the charge landed in between, it returns that charge's result. Cancelled resolves as <em>declined</em>, with reason <code>abandoned</code>.<br>
     <strong>The gateway throws:</strong> leave the order pending and try again later.</div></li>
@@ -472,8 +473,8 @@ findStalePending(db, ttl, s):
 <p>There is no off-the-shelf fake. Stripe's test mode needs a secret key, network access and an account, and the brief forbids depending on private services or credentials. It is also rate limited and can't produce a timeout on demand. <code>stripe-mock</code> is offline but stateless, and its README says it returns success instead of errors. Stripe's own guidance for automated tests is to mock the gateway's responses. So we write a small fake, shaped like Stripe:</p>
 <pre><code>interface PaymentGateway {
   charge(input: { orderId: string; amountPaise: number; paymentToken: string }, signal: AbortSignal): Promise&lt;ChargeResult&gt;
-  retrieve(orderId: string): Promise&lt;ChargeResult | { outcome: 'not_found' }&gt;
-  cancel(orderId: string): Promise&lt;ChargeResult | { outcome: 'cancelled' }&gt;
+  retrieve(orderId: string, signal: AbortSignal): Promise&lt;ChargeResult | { outcome: 'not_found' }&gt;
+  cancel(orderId: string, signal: AbortSignal): Promise&lt;ChargeResult | { outcome: 'cancelled' }&gt;
 }
 type ChargeResult =
   | { outcome: 'approved'; paymentRef: string }
@@ -665,7 +666,7 @@ new AppError('CART_NOT_FOUND', details?)    // status and final come from ERRORS
 <tr><td>T7</td><td>10 pairs of carts, <code>[keyboard, mouse]</code> and <code>[mouse, keyboard]</code>, inserted in opposite order, fired together</td><td>All 201, no 500s, no <code>40P01</code>. A small test with limited signal (see the mutation log)</td><td>Locks are taken per line in cart order</td></tr>
 <tr><td>T8</td><td>5 identical concurrent PUTs on a new line, behind a barrier holding <code>FOR UPDATE</code> on the cart (which also blocks the FK's <code>KEY SHARE</code>, so lockless PUTs queue too). Then the same PUT again</td><td><code>{201:1, 200:4}</code>, one row, quantity unchanged, and then 200</td><td>PUT skips the cart lock, or the upsert detection is wrong</td></tr>
 <tr><td>T9</td><td>2n paid orders, then 5 parallel coupon generations behind a barrier holding the advisory lock</td><td>Exactly 2 coupons (milestones 1 and 2) and 3 × 409</td><td>The advisory lock is removed (the losers get 500 from 23505 on UNIQUE). Removing UNIQUE alone fails nothing, because the lock already serializes (I9)</td></tr>
-<tr><td>T10</td><td>Two reconciles at once on one stale <code>tok_timeout_declined</code> order, behind a cart barrier</td><td>One transition, and <code>resolved_at</code> is set once. Stock equals the seed value exactly. The coupon is <code>available</code>. Both reconciles list the order as <code>failed</code></td><td>The <code>AND status = 'pending_payment'</code> guard is removed, so stock is restored twice (I13)</td></tr>
+<tr><td>T10</td><td>Two reconciles at once on one stale <code>tok_timeout_declined</code> order, behind a cart barrier</td><td>One transition, and <code>resolved_at</code> is set once. Stock equals the seed value exactly. The coupon is <code>available</code>. Exactly one reconcile lists the order, as <code>failed</code></td><td>The <code>AND status = 'pending_payment'</code> guard is removed, so stock is restored twice (I13)</td></tr>
 <tr><td>T11</td><td>Recovery against the original phase 3: gated <em>after</em> recording an approval, backdated, then reconcile, then release</td><td>Reconcile makes the order <code>paid</code>. <code>orders.resolved_at</code>, <code>coupons.redeemed_at</code> and <code>payment_ref</code> are identical before and after the release. The original request responds 201. One charge</td><td>Finalize isn't conditional, which shows up as the timestamps being rewritten (I13)</td></tr>
 <tr><td>T12</td><td>A slow charge overtaken: gated <em>before</em> recording, backdated, then reconcile, then release</td><td>Reconcile: not found, cancelled, <code>failed</code> with reason <code>abandoned</code>, everything released. After release the fake declines (<code>cancelled</code>). The original request responds 402 with reason <strong><code>abandoned</code></strong>, which proves the response comes from the current state. Zero approved charges</td><td>Recovery releases without calling <code>cancel()</code> (I7), or the response comes from the request's own result</td></tr>
 </table></div>
@@ -696,7 +697,7 @@ new AppError('CART_NOT_FOUND', details?)    // status and final come from ERRORS
 <tr><td>T28</td><td>Unit and integration: milestones</td><td>n−1, n and 2n paid orders. Pending and failed orders don't count. Oldest milestone first. <code>remainingEligible</code></td><td>The count includes non-paid orders</td></tr>
 <tr><td>T29</td><td>Unit: config, as one <code>it.each</code></td><td>Rejects <code>n</code> of 0 or 1.5, <code>x</code> of 0 or 101, and a TTL below 10 × the gateway timeout. Accepts <code>x = 100</code></td><td>The boot schema is loosened</td></tr>
 <tr><td>T30</td><td>Unit: fake gateway</td><td>Charging the same order twice gives the same result with one record. <code>cancel()</code> then <code>charge()</code> gives declined, <code>cancelled</code>. <code>charge()</code> then <code>cancel()</code> returns the charge. The timeout tokens record, then throw</td><td>The fake stops modelling idempotency or cancellation (I3, I7)</td></tr>
-<tr><td>T31</td><td>Recovery with stub gateways, calling <code>resolvePendingOrder</code> and reconcile directly</td><td><ul><li><code>retrieve</code> gives not found and <code>cancel</code> gives approved (the charge landed in between): the order is <code>paid</code> and the coupon <code>redeemed</code>.</li><li><code>retrieve</code> throws: the order stays pending.</li><li>Reconcile over two stale orders where one throws: the other resolves, and <code>stillPending</code> counts the failure.</li></ul></td><td>Recovery ignores a charge that landed between the two calls, releases on a gateway error, or one failure aborts reconcile (I7)</td></tr>
+<tr><td>T31</td><td>Recovery with stub gateways, calling <code>resolvePendingOrder</code> and reconcile directly</td><td><ul><li><code>retrieve</code> gives not found and <code>cancel</code> gives approved (the charge landed in between): the order is <code>paid</code> and the coupon <code>redeemed</code>.</li><li><code>retrieve</code> or <code>cancel</code> throws, or hangs past <code>GATEWAY_TIMEOUT_MS</code>: the order stays pending.</li><li>Reconcile over two stale orders where one throws: the other resolves, and <code>stillPending</code> counts the failure.</li></ul></td><td>Recovery ignores a charge that landed between the two calls, releases on a gateway error, or one failure aborts reconcile (I7)</td></tr>
 </table></div>
 <p class="muted"><strong>Mutation log.</strong> For each concurrency and payment test, remove its enforcement once, watch the test fail, and record it in <code>DECISIONS.md</code> as "removed X, then test Y fails with Z", noting which statement blocked on the barrier. Two notes belong there as well:</p>
 <ul class="muted">

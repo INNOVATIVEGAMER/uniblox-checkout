@@ -41,8 +41,8 @@ export function gated(inner: PaymentGateway, { at }: { at: 'before' | 'after' })
       await untilReleased(released, signal);
       return result;
     },
-    retrieve: (orderId) => inner.retrieve(orderId),
-    cancel: (orderId) => inner.cancel(orderId),
+    retrieve: (orderId, signal) => inner.retrieve(orderId, signal),
+    cancel: (orderId, signal) => inner.cancel(orderId, signal),
   };
 
   return {

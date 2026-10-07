@@ -125,6 +125,27 @@ For HTTP, Express and Fastify were the alternatives to Hono. For validation, the
 
 **Consequences:** `server.ts` and the test helper are the only places that assemble the graph.
 
+### Decision: Admin routes have no authentication
+
+**Context:** `PATCH /admin/products/:id`, `POST` and `GET /admin/coupons`, `GET /admin/orders` and `POST /admin/payments/reconcile` change prices and stock, mint discounts, expose every order, and make gateway calls. The brief asks for admin APIs but no users or auth.
+
+**Options considered:**
+
+- No authentication, with the routes grouped under `/admin`.
+- A shared admin token in config, checked by a middleware on `/admin/*`.
+
+**Choice:** no authentication. Every admin route lives under `/admin`, so one middleware on that prefix can guard them all later.
+
+**Why:**
+
+- The brief allows it, and nothing is deployed.
+- A token from config would protect nothing a reviewer runs locally, and would add a header to every admin request in the tests and `requests.http`.
+
+**Consequences:**
+
+- Anyone who can reach the server can change prices, generate coupons and trigger reconcile. Reconcile is safe to call repeatedly, because it resolves only orders past the TTL and each order exactly once (I13), but each call can make two gateway calls per stale order.
+- Idempotency keys are global for the same reason (see the idempotency decision).
+
 ### Decision: PUT sets the quantity, and DELETE is idempotent
 
 **Context:** A client that times out on "add to cart" retries. The brief grades the service on repeated requests, and only checkout is meant to carry an idempotency key.
@@ -265,7 +286,7 @@ For HTTP, Express and Fastify were the alternatives to Hono. For validation, the
 - `stripe-mock`.
 - Our own in-process fake behind a `PaymentGateway` interface.
 
-**Choice:** `PaymentGateway.charge(input, signal)` returns `approved` with a `paymentRef`, or `declined` with a reason. A throw means the outcome is unknown. `retrieve(orderId)` returns the recorded charge or `not_found`. `cancel(orderId)` returns the recorded charge if there is one; otherwise it records a tombstone and returns `cancelled`, and any later `charge()` for that order is declined with `cancelled`. `tok_timeout_approved` and `tok_timeout_declined` record their outcome, then throw. `FakeGateway` maps Stripe's own test tokens (`pm_card_visa`, `pm_card_chargeDeclined`, `pm_card_chargeDeclinedInsufficientFunds`). Any other token is declined with `invalid_payment_method`. Charges are recorded in a `Map` keyed by order ID, so a repeated charge returns the recorded result and nothing is charged twice. Test-only control lives in `test/helpers/gate.ts`: `gated(gateway, { at: 'before' | 'after' })` holds `charge()` until `release()`, and honours the abort signal.
+**Choice:** `PaymentGateway.charge(input, signal)` returns `approved` with a `paymentRef`, or `declined` with a reason. A throw means the outcome is unknown. `retrieve(orderId, signal)` returns the recorded charge or `not_found`. `cancel(orderId, signal)` returns the recorded charge if there is one; otherwise it records a tombstone and returns `cancelled`, and any later `charge()` for that order is declined with `cancelled`. `tok_timeout_approved` and `tok_timeout_declined` record their outcome, then throw. `FakeGateway` maps Stripe's own test tokens (`pm_card_visa`, `pm_card_chargeDeclined`, `pm_card_chargeDeclinedInsufficientFunds`). Any other token is declined with `invalid_payment_method`. Charges are recorded in a `Map` keyed by order ID, so a repeated charge returns the recorded result and nothing is charged twice. Test-only control lives in `test/helpers/gate.ts`: `gated(gateway, { at: 'before' | 'after' })` holds `charge()` until `release()`, and honours the abort signal.
 
 **Why:**
 
@@ -302,7 +323,7 @@ Config validation refuses to start unless `PAYMENT_PENDING_TTL_SECONDS` is at le
 
 **Consequences:**
 
-- `retrieve()` and `cancel()` take no abort signal, because the fake answers synchronously. A real adapter would bound both with `GATEWAY_TIMEOUT_MS`, so that a hung PSP can't stall a PUT's phase 0.
+- Each `retrieve()` and `cancel()` is bounded by `GATEWAY_TIMEOUT_MS`, like `charge()`, so a hung PSP can't stall a PUT's phase 0. A timeout is a gateway error: the order stays pending (T31).
 - With a real PSP, `cancel()` needs the PaymentIntent to exist, so the adapter would create it before confirming it.
 - `finalizeOrder`'s conditional claim makes every race safe: two recoveries at once, or a recovery and the original request's late finalize, change the order exactly once (T10, T11).
 
@@ -337,9 +358,11 @@ Config validation refuses to start unless `PAYMENT_PENDING_TTL_SECONDS` is at le
 
 **Consequences:**
 
-- A request that meets a stale order waits on the gateway for it.
-- Every checkout, PUT and DELETE runs `findStalePending`, which scans `orders` because there is no index for it. That is fine at this scale. A partial index `ON orders (created_at) WHERE status = 'pending_payment'` would keep the cost proportional to pending orders.
+- A request that meets stale orders waits on the gateway for each of them, one at a time, up to two calls of `GATEWAY_TIMEOUT_MS` per order. Nothing caps how many orders one request resolves, so the first checkout after a gateway outage can carry every order the outage left behind.
+- Concurrent requests that find the same stale orders each call the gateway for all of them, then queue on the cart lock in `finalizeOrder`. Only one claims each order (I13, T10), so the duplicate work is safe, but it is not free.
+- Every checkout, PUT and DELETE runs `findStalePending`. The partial index `orders_pending_created_at_idx` `ON orders (created_at) WHERE status = 'pending_payment'` (migration 0005) keeps that cost proportional to pending orders, not to every order ever placed.
 - Reconcile has no error response. A gateway error or lock timeout on one order leaves that order counted in `stillPending`.
+- `resolved` lists only the orders this call claimed. When two recoveries race, the one that loses `finalizeOrder`'s claim leaves the order out (T10).
 - Checkout reads the cart's product IDs before reserve, under no lock. A line added in between misses product recovery, but the PUT that added it ran its own.
 
 ### Decision: A reconciler, not Brandur's completer
@@ -603,6 +626,8 @@ Each test that guards an enforcement was run once with that enforcement removed,
 | The Crockford alias `.overwrite` in `couponCodeSchema`           | The unit test "reads a typed I or L as 1 and O as 0"         |
 | `pg_advisory_xact_lock` in generation                            | T9 fails with "1 request(s) finished without blocking on the barrier". Without a barrier, 5 parallel calls over 4 paid orders gave `[201, 500, 500, 500, 500]` 9 runs out of 10 (23505 on `coupons_milestone_unique`) |
 | `AND status = 'pending_payment'` in `finalizeOrder`'s claim      | T10: stock 4 instead of 3, because both reconciles restore it. T11: `resolved_at` and `redeemed_at` are rewritten when the original request finalizes, here 4 ms later |
+| `finalizeOrder` returning the status when its claim lost         | T10: both reconciles list the order, instead of exactly one |
+| The `GATEWAY_TIMEOUT_MS` signal on `retrieve()` (a signal that never aborts) | T31 "retrieve() hangs": the test times out instead of rejecting with `TimeoutError` |
 | The `cancel()` call in recovery (release on `not_found`)         | T12: the held charge is approved after release, instead of the `cancelled` tombstone. T31 "between retrieve and cancel" rows and "cancel() throws" |
 | A `cancel()` error treated as `cancelled`                        | T31 "cancel() throws after not found": the order is released while a charge could still land |
 | A charge returned by `cancel()` ignored (always `abandoned`)      | T31 "a charge that lands between retrieve and cancel" and "a decline that lands …" |

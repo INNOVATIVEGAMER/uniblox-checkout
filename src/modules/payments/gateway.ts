@@ -11,10 +11,12 @@ export type Resolution = { outcome: 'approved'; paymentRef: string | null } | { 
 
 export const zeroTotalResolution: Resolution = { outcome: 'approved', paymentRef: null };
 
+export type PendingOrder = { id: string; totalPaise: number };
+
 export interface PaymentGateway {
   /** Throwing means the outcome is unknown: the charge may or may not have landed. */
   charge(input: ChargeInput, signal: AbortSignal): Promise<ChargeResult>;
-  retrieve(orderId: string): Promise<RetrieveResult>;
+  retrieve(orderId: string, signal: AbortSignal): Promise<RetrieveResult>;
   /** Returns the charge if one landed. Otherwise no charge for this order can land from now on. */
-  cancel(orderId: string): Promise<CancelResult>;
+  cancel(orderId: string, signal: AbortSignal): Promise<CancelResult>;
 }

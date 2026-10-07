@@ -11,7 +11,7 @@ import { reconcile, resolvePendingOrder } from '../src/modules/payments/recovery
 import { createTestApp, sendJson } from './helpers/app';
 import { barrier } from './helpers/barrier';
 import { cartRequests } from './helpers/carts';
-import { expectOrder, newKey, postCheckout, stockOf, throwingGateway, visa } from './helpers/checkout';
+import { expectOrder, newKey, orderStatus, postCheckout, stockOf, throwingGateway, visa } from './helpers/checkout';
 import { withCleanup } from './helpers/cleanup';
 import { couponRow, insertCoupon, withTenPercent } from './helpers/coupons';
 import { resetDb } from './helpers/db';
@@ -58,7 +58,7 @@ async function expectReleased(cartId: string, couponCode: string) {
 }
 
 describe('T10 two reconciles at once on one stale declined order', () => {
-  it('resolve it once behind a cart barrier: stock back to the seed value, the coupon available, both list it failed', async () => {
+  it('resolve it once behind a cart barrier: stock back to the seed value, the coupon available, one lists it failed', async () => {
     muteUnknownOutcomes();
     const fakeApp = appWith(new FakeGateway());
     const { coupon, cartId, total } = await lampWithCoupon();
@@ -68,7 +68,8 @@ describe('T10 two reconciles at once on one stale declined order', () => {
 
     const results = await barrier({ table: 'carts', id: cartId }, 2, () => [postReconcile(fakeApp), postReconcile(fakeApp)]);
 
-    for (const result of results) expect(result).toEqual({ resolved: [{ orderId: order.id, status: 'failed' }], stillPending: 0 });
+    expect(results.flatMap((result) => result.resolved)).toEqual([{ orderId: order.id, status: 'failed' }]);
+    for (const result of results) expect(result.stillPending).toBe(0);
     expect(await resolutionRow(db, order.id)).toMatchObject({ status: 'failed', failureReason: 'card_declined' });
     await expectReleased(cartId, coupon.code);
   });
@@ -147,7 +148,7 @@ describe('T14 an approved charge whose response timed out', () => {
     expect(await expectOrder(await postCheckout(fakeApp, cartId, key, body), 202, { replayed: true })).toEqual(order);
 
     expect(await postReconcile(fakeApp)).toEqual({ resolved: [], stillPending: 1 });
-    expect((await resolutionRow(db, order.id))?.status).toBe('pending_payment');
+    expect(await orderStatus(db, order.id)).toBe('pending_payment');
 
     await backdate(db, order.id);
     expect(await postReconcile(fakeApp)).toEqual({ resolved: [{ orderId: order.id, status: 'paid' }], stillPending: 0 });
@@ -214,7 +215,7 @@ describe('T31 recovery with stub gateways', () => {
     const { coupon, cartId, order } = await staleLampOrder();
     const gateway = stub({ retrieve: notFound, cancel: () => Promise.resolve({ outcome: 'approved', paymentRef: 'ch_late' }) });
 
-    expect(await resolvePendingOrder({ db, gateway }, order)).toBe('paid');
+    expect(await resolvePendingOrder({ db, gateway, config }, order)).toBe('paid');
     expect(await resolutionRow(db, order.id)).toMatchObject({ status: 'paid', paymentRef: 'ch_late' });
     expect(await couponRow(db, coupon.code)).toEqual({ status: 'redeemed', redeemedAt: expect.any(Date) });
     expect(await getCart(cartId)).toMatchObject({ status: 'checked_out' });
@@ -224,7 +225,7 @@ describe('T31 recovery with stub gateways', () => {
     const { coupon, cartId, order } = await staleLampOrder();
     const gateway = stub({ retrieve: notFound, cancel: () => Promise.resolve({ outcome: 'declined', reason: 'card_declined' }) });
 
-    expect(await resolvePendingOrder({ db, gateway }, order)).toBe('failed');
+    expect(await resolvePendingOrder({ db, gateway, config }, order)).toBe('failed');
     expect(await resolutionRow(db, order.id)).toMatchObject({ status: 'failed', failureReason: 'card_declined' });
     await expectReleased(cartId, coupon.code);
   });
@@ -235,11 +236,25 @@ describe('T31 recovery with stub gateways', () => {
   ])('%s: the call rejects and the order stays pending, holding its stock and coupon', async (_label, gateway) => {
     const { coupon, cartId, order } = await staleLampOrder();
 
-    await expect(resolvePendingOrder({ db, gateway }, order)).rejects.toThrow('connection reset');
+    await expect(resolvePendingOrder({ db, gateway, config }, order)).rejects.toThrow('connection reset');
     expect(await resolutionRow(db, order.id)).toMatchObject({ status: 'pending_payment', resolvedAt: null });
     expect(await stockOf(db, 'p_lamp')).toBe(2);
     expect(await couponRow(db, coupon.code)).toEqual({ status: 'reserved', redeemedAt: null });
     expect(await getCart(cartId)).toMatchObject({ status: 'pending_payment', orderId: order.id });
+  });
+
+  const hung = (_orderId: string, signal: AbortSignal) =>
+    new Promise<never>((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+
+  it.each([
+    ['retrieve() hangs', stub({ retrieve: hung })],
+    ['cancel() hangs after not found', stub({ retrieve: notFound, cancel: hung })],
+  ])('%s: the call times out after GATEWAY_TIMEOUT_MS and the order stays pending', async (_label, gateway) => {
+    const { order } = await staleLampOrder();
+
+    const fast = { ...config, GATEWAY_TIMEOUT_MS: 50 };
+    await expect(resolvePendingOrder({ db, gateway, config: fast }, order)).rejects.toMatchObject({ name: 'TimeoutError' });
+    expect(await resolutionRow(db, order.id)).toMatchObject({ status: 'pending_payment', resolvedAt: null });
   });
 
   it('one failing order does not abort reconcile: the next one resolves, and stillPending counts the failure', async () => {
@@ -339,7 +354,7 @@ describe('T15 recovery triggers, on the 200 ms app', () => {
 
     expect((await shortApp.request(`/carts/${fixture.cartA}`)).status).toBe(200);
     expect((await shortApp.request(`/orders/${orderId}`)).status).toBe(200);
-    expect((await resolutionRow(db, orderId))?.status).toBe('pending_payment');
+    expect(await orderStatus(db, orderId)).toBe('pending_payment');
 
     const res = await trigger.send(fixture);
     expect(res.status).toBe(trigger.resolvedStatus);
@@ -352,7 +367,7 @@ describe('T15 recovery triggers, on the 200 ms app', () => {
     const [status, code] = trigger.blocked;
 
     await expectError(await trigger.send(fixture), status, code);
-    expect((await resolutionRow(db, orderId))?.status).toBe('pending_payment');
+    expect(await orderStatus(db, orderId)).toBe('pending_payment');
   });
 
   it('a gateway failure during recovery is logged, and the request carries on to its own answer', async () => {
@@ -364,7 +379,7 @@ describe('T15 recovery triggers, on the 200 ms app', () => {
     const res = await cartRequests(short.appWith(throwingGateway)).putItem(cartB, 'p_lamp', 1);
 
     await expectError(res, 409, 'INSUFFICIENT_STOCK');
-    expect((await resolutionRow(db, order.id))?.status).toBe('pending_payment');
+    expect(await orderStatus(db, order.id)).toBe('pending_payment');
     expect(error).toHaveBeenCalledOnce();
   });
 });
