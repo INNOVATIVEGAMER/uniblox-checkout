@@ -1,6 +1,7 @@
 'use client';
 
 import { useMutation, useQuery } from '@tanstack/react-query';
+import { useRef } from 'react';
 import { type Cart, api, formatPaise } from '@/lib/api';
 import { ErrorNotice } from '@/components/error-notice';
 import { QueryState } from '@/components/query-state';
@@ -18,13 +19,15 @@ export function ProductList({
   onCartCreated: (id: string) => void;
 }) {
   const products = useQuery({ queryKey: ['products'], queryFn: api.listProducts });
+  const unsavedCartId = useRef<string | null>(null);
   const addToCart = useMutation({
     mutationFn: async (productId: string) => {
-      const id = cartId ?? (await api.createCart()).id;
+      const id = cartId ?? (unsavedCartId.current ??= (await api.createCart()).id);
       const inCart = cart?.lines.find((line) => line.productId === productId)?.quantity ?? 0;
       return api.setQuantity(id, productId, inCart + 1);
     },
-    // The new cart is kept only once it has a line: storing it re-keys this list, which would drop a pending Add.
+    // A new cart is stored only once it has a line: storing it re-keys this list, which would drop a pending Add.
+    // Until then a failed Add's cart is held in a ref, so the next Add reuses it instead of creating another.
     onSuccess: (updated) => {
       if (cartId === null) onCartCreated(updated.id);
     },

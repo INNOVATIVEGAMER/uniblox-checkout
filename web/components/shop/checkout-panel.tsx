@@ -33,7 +33,7 @@ export function CheckoutPanel({ cartId, cartOpen, quote }: { cartId: string; car
   const send = useMutation({
     mutationFn: (requests: Attempt[]) =>
       Promise.allSettled(requests.map(({ cartId, key, body }) => api.checkout(cartId, key, body))),
-    // A rejected checkout leaves the cart open, and may have been rejected over the coupon itself.
+    // A rejection on an open cart may have been over the coupon itself.
     onSuccess: (results) => {
       if (results.some((result) => result.status === 'rejected')) {
         void queryClient.invalidateQueries({ queryKey: ['coupon-preview', cartId] });
