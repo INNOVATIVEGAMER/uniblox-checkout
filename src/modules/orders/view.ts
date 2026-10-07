@@ -1,4 +1,4 @@
-import { asc, eq } from 'drizzle-orm';
+import { type SQL, asc, eq, sql } from 'drizzle-orm';
 import type { Db } from '../../db/client';
 import { coupons, orderItems, orders } from '../../db/schema';
 import { AppError, toErrorBody } from '../../errors';
@@ -34,12 +34,40 @@ function toCouponView(code: string | null, percentOff: number | null) {
   return { code, percentOff };
 }
 
+/**
+ * Order views matching `where`, oldest first. The lines are read by the fetched ids, not by `where`: an order's
+ * status can change between the two reads, but its lines commit with it and never change.
+ */
+export async function selectOrderViews(db: Db, where?: SQL) {
+  const rows = await db
+    .select(orderColumns)
+    .from(orders)
+    .leftJoin(coupons, eq(coupons.id, orders.couponId))
+    .where(where)
+    .orderBy(asc(orders.createdAt), asc(orders.id));
+  const lines = await db
+    .select({ orderId: orderItems.orderId, line: lineColumns })
+    .from(orderItems)
+    .where(sql`${orderItems.orderId} = ANY(${sql.param(rows.map((r) => r.id))})`)
+    .orderBy(asc(orderItems.orderId), asc(orderItems.productId));
+
+  const linesByOrder = new Map<string, (typeof lines)[number]['line'][]>();
+  for (const { orderId, line } of lines) {
+    const group = linesByOrder.get(orderId);
+    if (group) group.push(line);
+    else linesByOrder.set(orderId, [line]);
+  }
+  return rows.map(({ couponCode, percentOff, ...order }) => ({
+    ...order,
+    coupon: toCouponView(couponCode, percentOff),
+    lines: linesByOrder.get(order.id) ?? [],
+  }));
+}
+
 export async function loadOrderView(db: Db, orderId: string) {
-  const [row] = await db.select(orderColumns).from(orders).leftJoin(coupons, eq(coupons.id, orders.couponId)).where(eq(orders.id, orderId));
-  if (!row) throw new AppError('ORDER_NOT_FOUND');
-  const lines = await db.select(lineColumns).from(orderItems).where(eq(orderItems.orderId, orderId)).orderBy(asc(orderItems.productId));
-  const { couponCode, percentOff, ...order } = row;
-  return { ...order, coupon: toCouponView(couponCode, percentOff), lines };
+  const [view] = await selectOrderViews(db, eq(orders.id, orderId));
+  if (!view) throw new AppError('ORDER_NOT_FOUND');
+  return view;
 }
 
 export type OrderView = Awaited<ReturnType<typeof loadOrderView>>;

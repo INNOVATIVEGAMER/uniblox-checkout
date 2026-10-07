@@ -1,6 +1,6 @@
 import { eq, sql } from 'drizzle-orm';
 import type { Config } from '../../config';
-import type { Db, Tx } from '../../db/client';
+import { type Db, type Tx, onlyRow } from '../../db/client';
 import { coupons, orders } from '../../db/schema';
 import { milestoneProgress } from '../../domain/milestones';
 import { AppError } from '../../errors';
@@ -11,6 +11,9 @@ export type CouponConfig = Pick<Config, 'COUPON_EVERY_N_ORDERS' | 'COUPON_PERCEN
 export const COUPON_GENERATION_LOCK = 4_004;
 
 const MAX_CODE_ATTEMPTS = 3;
+
+/** The highest milestone with a coupon, 0 before the first. */
+export const lastMilestone = sql`coalesce(max(${coupons.milestone}), 0)`.mapWith(Number);
 
 export const couponColumns = {
   id: coupons.id,
@@ -50,8 +53,8 @@ export function generateCoupon(db: Db, config: CouponConfig, newCode = generateC
       await tx.execute(sql`SELECT pg_advisory_xact_lock(${COUPON_GENERATION_LOCK})`);
 
       const paidOrders = await tx.$count(orders, eq(orders.status, 'paid'));
-      const [last] = await tx.select({ milestone: sql<number | null>`max(${coupons.milestone})` }).from(coupons);
-      const progress = milestoneProgress({ paidOrders, n: config.COUPON_EVERY_N_ORDERS, lastMilestone: last?.milestone ?? 0 });
+      const last = onlyRow(await tx.select({ lastMilestone }).from(coupons));
+      const progress = milestoneProgress({ paidOrders, n: config.COUPON_EVERY_N_ORDERS, lastMilestone: last.lastMilestone });
       if (!progress.eligible) {
         throw new AppError('NO_ELIGIBLE_MILESTONE', { paidOrders, nextMilestoneAt: progress.nextMilestoneAt });
       }

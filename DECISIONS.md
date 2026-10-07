@@ -22,6 +22,7 @@ _Consolidated table (I1–I15, where each is enforced, and the test that proves 
 - **I12 (a cart changes only while it is open):** PUT and DELETE lock the cart row `FOR NO KEY UPDATE` and require `status = 'open'`, in the same transaction as the write. That one guard covers `pending_payment` and `checked_out`. The T24 locked-status rows drive both states through a real checkout, and a decline reopens the cart for writes.
 - **I13 (an order leaves `pending_payment` exactly once):** `finalizeOrder` claims the order with `UPDATE … WHERE status = 'pending_payment'`, and does nothing else when no row changed. Two reconciles on one order change it once (T10), and so do recovery and the original request's own finalize (T11).
 - **I14 (a committed key has exactly one replay source):** the claim and its outcome (the order ID set in reserve, or the stored error) commit in the same transaction. `CHECK (order_id IS NULL OR response_status IS NULL)` rules out both at once. T20.
+- **I15 (the report reconciles with the orders and coupons, and reading it mutates nothing):** `GET /admin/report` reads every figure in one `READ ONLY` transaction at `REPEATABLE READ`, and no GET route calls recovery. T26 checks the report against the orders list and a database snapshot taken around every GET.
 
 ## Ambiguities and chosen semantics
 
@@ -63,6 +64,15 @@ _Filled in by each issue as it resolves them._
 - **The TTL is measured on the database clock:** `created_at < now() - make_interval(secs => ttl)`. Clock skew between app instances can't make an order stale early.
 - **An abandoned order fails with reason `abandoned`.** That is the reason recovery gives when it cancels a charge the gateway never recorded. If the original request's late charge is finalized first, or a second recovery sees the cancel's tombstone, the stored reason is `cancelled` instead. Both mean that nothing was charged.
 - **`stillPending` counts every order still pending after a reconcile.** That includes orders younger than the TTL, which reconcile leaves alone, and stale orders whose recovery failed.
+
+### Reporting
+
+- **Only paid orders count as sold.** Revenue, discounts and quantities sum paid orders only. A pending order may still fail, and a failed order sold nothing.
+- **Gross is the sum of subtotals, discounts the sum of discounts, and net the sum of totals.** Every order satisfies `total = subtotal − discount` (I10), so net always equals gross less discounts.
+- **Quantities come from the order lines, the name from the product as it is now.** The lines are the record of what was sold (I11). The name is the current one, so a renamed product isn't split across two rows; the order views keep the name each line was sold under.
+- **`rewarded` is the highest milestone with a coupon**, the same figure coupon generation reads, so `unrewarded` always equals what `POST /admin/coupons` can still generate.
+- **Reconciliation means four checks hold:** summing `GET /admin/orders?status=paid` gives the sales figures; `ordersByStatus` matches the list's length per status; redeemed coupons equal paid orders with a coupon; reserved coupons equal pending orders with a coupon. The report and the list are separate requests, so they agree only when no checkout commits between them. T26 checks them with nothing running.
+- **The orders list isn't paginated.** Pagination is deferred.
 
 ## Material decisions
 
@@ -127,7 +137,7 @@ For HTTP, Express and Fastify were the alternatives to Hono. For validation, the
 
 ### Decision: Admin routes have no authentication
 
-**Context:** `PATCH /admin/products/:id`, `POST` and `GET /admin/coupons`, `GET /admin/orders` and `POST /admin/payments/reconcile` change prices and stock, mint discounts, expose every order, and make gateway calls. The brief asks for admin APIs but no users or auth.
+**Context:** `PATCH /admin/products/:id`, `POST` and `GET /admin/coupons`, `GET /admin/orders`, `GET /admin/report` and `POST /admin/payments/reconcile` change prices and stock, mint discounts, expose every order and the revenue, and make gateway calls. The brief asks for admin APIs but no users or auth.
 
 **Options considered:**
 
@@ -143,7 +153,7 @@ For HTTP, Express and Fastify were the alternatives to Hono. For validation, the
 
 **Consequences:**
 
-- Anyone who can reach the server can change prices, generate coupons and trigger reconcile. Reconcile is safe to call repeatedly, because it resolves only orders past the TTL and each order exactly once (I13), but each call can make two gateway calls per stale order.
+- Anyone who can reach the server can change prices, generate coupons, read every order and the sales figures, and trigger reconcile. Reconcile is safe to call repeatedly, because it resolves only orders past the TTL and each order exactly once (I13), but each call can make two gateway calls per stale order.
 - Idempotency keys are global for the same reason (see the idempotency decision).
 
 ### Decision: PUT sets the quantity, and DELETE is idempotent
@@ -457,9 +467,30 @@ Config validation refuses to start unless `PAYMENT_PENDING_TTL_SECONDS` is at le
 
 **Consequences:** codes are case-insensitive for clients, and `O`/`0` and `I`/`L`/`1` are interchangeable. The length bound (1 to 64 after trimming) is a 400; any code inside it that doesn't exist is `422 COUPON_INVALID`.
 
-_Further decisions arrive with the issues that make them:_
+### Decision: The report reads one READ ONLY REPEATABLE READ snapshot
 
-- The report snapshot: #6.
+**Context:** the report is several aggregates over orders, order lines and coupons. If a checkout commits between two of them, the figures disagree: gross revenue could include an order that `paidOrders` leaves out, or a coupon could be `redeemed` before its order counts as paid.
+
+**Options considered:**
+
+- One large SQL statement that computes everything.
+- Several queries at READ COMMITTED, the level every other transaction uses.
+- Several queries in one `READ ONLY` transaction at `REPEATABLE READ`.
+
+**Choice:** `loadReport` (`src/modules/report/service.ts`) runs three queries, one per table, in `db.transaction(fn, { isolationLevel: 'repeatable read', accessMode: 'read only' })`. Counts per status use `count(*) FILTER (WHERE status = …)`, so a status with no rows reads 0 without a fill step. Every aggregate is cast to `bigint` and read with `.mapWith(Number)`, because node-postgres returns `bigint` and `numeric` as strings.
+
+**Why:**
+
+- **At READ COMMITTED each statement takes a new snapshot,** so the queries can straddle a commit.
+- **REPEATABLE READ takes one snapshot at the first query** and every later query reads it, so the figures always describe the same instant. A read-only transaction never waits on row locks and can't hit a serialization failure, so it costs nothing extra.
+- **One large statement** gets the same consistency, but is harder to read and to explain than three short queries.
+- **`READ ONLY`** turns an accidental write in the report into an error (`25006`), which backs up I15.
+
+**Consequences:**
+
+- The report is a point in time. A checkout committing during it shows up on the next call.
+- Neither the isolation level nor `READ ONLY` is proven by a test: no test commits a checkout between the report's queries. Both fail no test when removed (see the mutation log).
+- Each call scans every order. Counters kept by `finalizeOrder` or a read replica fix that at scale; both are deferred.
 
 ## Transaction, concurrency and idempotency strategy
 
@@ -480,6 +511,10 @@ Checkout is one request in three phases (see "Atomic phases, not an outbox"):
 The lock order, isolation level and key storage rule are in the decisions above.
 
 **Pending recovery** runs before any transaction opens, on the checkout, PUT and DELETE that a stale hold would block, and on `POST /admin/payments/reconcile`. It reads the stale orders, asks the gateway with no connection held, then calls the same `finalizeOrder` as phase 3. Its decline path locks the cart, then the products by ID, then the coupon, the same order as reserve. See "Hold unknown outcomes, and cancel before release".
+
+**The report** is the only transaction not at READ COMMITTED: one `READ ONLY` transaction at `REPEATABLE READ`, so all its figures come from one snapshot. It takes no locks. See "The report reads one READ ONLY REPEATABLE READ snapshot".
+
+**The orders list** (`selectOrderViews`) reads at READ COMMITTED in two statements: the orders matching the filter, then the lines of exactly those order ids, passed as one array parameter. Each order's status is the one the first statement saw, and its lines are always complete, because an order's lines are inserted in the same transaction as the order and never change. The lines are not filtered by status again: an order finalized between the two statements would otherwise come back with no lines.
 
 Every lock wait is bounded: the pool sets `lock_timeout` from `LOCK_TIMEOUT_MS` on every connection. A wait past that limit fails with Postgres error `55P03`, which the error handler maps to `503 LOCK_TIMEOUT`.
 
@@ -642,14 +677,18 @@ Each test that guards an enforcement was run once with that enforcement removed,
 | The DELETE recovery hook                                         | T15 "a DELETE on the cart" |
 | DELETE's recovery run inside a transaction that holds the cart lock | T15 "a DELETE on the cart": 409 instead of 200, after a `55P03` lock timeout is logged |
 | Pointing the key at the order in reserve                         | T16: the retry gets 500 ("has neither an order nor a response") instead of a replayed 202 |
+| The paid filter on the report's revenue sums                     | T26: gross, discounts and net include the failed and pending orders |
+| The paid filter on the report's quantity query                   | T26: `quantityByProduct` gains the failed keyboard, the pending monitor and the stale cable |
+| `recoverStale({ scope: 'all' })` added to the report route       | T26: the first report resolves the stale order, so `ordersByStatus` shows 1 pending and 2 failed |
 
 On the barriers: in T1 and T2 every checkout blocks on `lockProducts` (the lamp row), and without the lock it blocks on the `UPDATE products` instead. In T3 the first request blocks on the cart lock and the other nine on its uncommitted key claim. In T5 all five block on the cart lock. In T6 all five block on the coupon lock in reserve; their product locks don't contend, because the five carts share no product. In T9 all five block on `pg_advisory_xact_lock`, which `pg_stat_activity` reports as `wait_event_type = 'Lock'`, `wait_event = 'advisory'`. In T10 both reconciles block on `finalizeOrder`'s cart lock, after their lock-free read and gateway calls.
 
-Four notes:
+Five notes:
 
 - **Removing the savepoint alone fails no test.** Every check already runs before the first write. With the savepoint kept, even moving the order insert before the checks passes every test, because the final error rolls the insert back. It is defence in depth.
 - **Removing `UNIQUE (milestone)` fails no test (T9 passes, 3 runs out of 3).** The advisory lock already serializes generation, so no duplicate milestone is ever inserted. It is the backstop, like the savepoint.
 - **Checkout's cart clause can't be isolated by a checkout row.** The cart's lines are its order's lines, so the product clause also matches. The PUT of another product and the DELETE are the rows that catch the missing cart clause.
+- **Running the report at READ COMMITTED, or without `READ ONLY`, fails no test.** No test commits a checkout between the report's queries, and the report writes nothing. Both are recorded in "The report reads one READ ONLY REPEATABLE READ snapshot".
 - **Removing `ORDER BY` from `lockProducts` fails no test (T7 passes, 3 runs out of 3).** A single `id IN (…)` statement scans the products in the same order in every transaction. Locking one line at a time in the cart's own order doesn't change it either, because the cart lines come from the `(cart_id, product_id)` primary key, already in product order. Only an order that really differs between transactions deadlocks. So T7 guards against per-line locking in an arbitrary order, and doesn't prove that `ORDER BY` is needed.
 
 On the barrier: with the cart lock present, every PUT blocks on `SELECT … FROM carts … FOR NO KEY UPDATE`. With it removed, every PUT blocks on the `INSERT INTO cart_items`, whose foreign-key check needs `FOR KEY SHARE` on the cart row that the barrier holds `FOR UPDATE`. So the barrier still lines the requests up, and they fail at the INSERT.

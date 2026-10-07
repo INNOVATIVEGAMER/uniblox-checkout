@@ -12,3 +12,9 @@ export function createDb(config: Pick<Config, 'DATABASE_URL' | 'LOCK_TIMEOUT_MS'
 
 export type Db = ReturnType<typeof createDb>['db'];
 export type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+
+export function onlyRow<T>(rows: T[]): T {
+  const [row] = rows;
+  if (!row) throw new Error('an aggregate without GROUP BY returned no row');
+  return row;
+}
