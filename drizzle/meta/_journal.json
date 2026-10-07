@@ -8,6 +8,13 @@
       "when": 1791324315153,
       "tag": "0000_products",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1791344072649,
+      "tag": "0001_carts",
+      "breakpoints": true
     }
   ]
 }

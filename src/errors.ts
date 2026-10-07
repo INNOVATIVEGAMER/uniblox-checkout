@@ -9,6 +9,11 @@ export const ERRORS = {
   VALIDATION_ERROR: { status: 400, final: false, message: 'The request is invalid' },
   NOT_FOUND: { status: 404, final: false, message: 'No route matches this method and path' },
   PRODUCT_NOT_FOUND: { status: 404, final: false, message: 'Product not found' },
+  CART_NOT_FOUND: { status: 404, final: true, message: 'Cart not found' },
+  CART_CHECKED_OUT: { status: 409, final: true, message: 'The cart is already checked out' },
+  CART_PAYMENT_PENDING: { status: 409, final: false, message: 'A payment for this cart is in progress' },
+  INSUFFICIENT_STOCK: { status: 409, final: true, message: 'Not enough stock for the requested quantity' },
+  CART_LINE_LIMIT: { status: 422, final: false, message: 'The cart has the maximum number of lines' },
   INTERNAL: { status: 500, final: false, message: 'Something went wrong' },
   LOCK_TIMEOUT: { status: 503, final: false, message: 'The resource is busy, retry shortly' },
 } as const satisfies Record<string, { status: ContentfulStatusCode; final: boolean; message: string }>;
