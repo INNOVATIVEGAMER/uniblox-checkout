@@ -198,21 +198,21 @@ li { margin: 3px 0; }
   <li><strong>Migration 0002:</strong> <code>carts</code> (with all three status values), and <code>cart_items</code> (quantity 1–1000, PK on cart and product).</li>
   <li><strong>Routes:</strong> <code>POST /carts</code>, <code>GET /carts/:id</code>, <code>PUT /carts/:id/items/:productId</code>, <code>DELETE /carts/:id/items/:productId</code>.</li>
   <li><strong>PUT and DELETE</strong> lock the cart <code>FOR NO KEY UPDATE</code> and require <code>status = 'open'</code>. That one guard covers both <code>checked_out</code> and <code>pending_payment</code>.</li>
-  <li><strong>PUT:</strong> a soft stock check, with 201 or 200 decided by a SELECT made under the cart lock, then an INSERT or an UPDATE.</li>
+  <li><strong>PUT:</strong> a soft stock check, and a line cap: a new line on a cart that already has <code>MAX_CART_LINES</code> (50) lines gets 422 <code>CART_LINE_LIMIT</code>, counted under the cart lock. 201 or 200 decided by a SELECT made under the cart lock, then an INSERT or an UPDATE.</li>
   <li><strong>DELETE</strong> of an absent line returns 200.</li>
   <li><strong>Cart view:</strong> live prices, <code>available</code>, <code>subtotalPaise</code>, and <code>discountPaise: 0</code> with <code>totalPaise = subtotal</code>. Those last two fields exist now so that 04 only adds a preview.</li>
   <li><strong>Test helper:</strong> <code>test/helpers/barrier.ts</code>, with the barrier (row or advisory lock, polled from a separate autocommit connection) and <code>holdLock</code>.</li>
 </ul>
 <h3>Errors introduced</h3>
-<p><code>CART_NOT_FOUND</code>, <code>CART_CHECKED_OUT</code>, <code>CART_PAYMENT_PENDING</code>, <code>INSUFFICIENT_STOCK</code></p>
+<p><code>CART_NOT_FOUND</code>, <code>CART_CHECKED_OUT</code>, <code>CART_PAYMENT_PENDING</code>, <code>INSUFFICIENT_STOCK</code>, <code>CART_LINE_LIMIT</code></p>
 <h3>Tests</h3>
 <ul>
   <li><strong>T8:</strong> 5 concurrent identical PUTs behind a <code>FOR UPDATE</code> barrier on the cart give <code>{201:1, 200:4}</code>.</li>
-  <li><strong>T24</strong>, this issue's rows: delete an absent line, PUT above stock, odd-paise totals, and <code>available:false</code> after a PATCH. Both locked statuses get rejected, with each status set directly in SQL. The end-to-end versions arrive with 03.</li>
+  <li><strong>T24</strong>, this issue's rows: delete an absent line, PUT above stock, odd-paise totals, and <code>available:false</code> after a PATCH; with 51 products inserted by the test, a 51st new line gets 422 <code>CART_LINE_LIMIT</code> while changing the quantity of one of the 50 still gets 200. Both locked statuses get rejected, with each status set directly in SQL. The end-to-end versions arrive with 03.</li>
   <li><strong>T25</strong>, this issue's rows: quantity 0, −1, 1.5, "2" and 1001; a malformed cart ID; an unknown cart on GET, PUT and DELETE; an unknown product on PUT.</li>
 </ul>
 <h3>Docs</h3>
-<p>README for the four routes, and the <code>requests.http</code> cart walkthrough. <code>DECISIONS.md</code>: PUT set-quantity with an idempotent DELETE, the soft stock check, and the 1000 quantity cap.</p>
+<p>README for the four routes, and the <code>requests.http</code> cart walkthrough. <code>DECISIONS.md</code>: PUT set-quantity with an idempotent DELETE, the soft stock check, the 1000 quantity cap, and the 50-line cap that bounds the money arithmetic.</p>
 <h3>Not in this issue</h3>
 <p>The coupon preview (04), and recovering stale orders before a mutation (05).</p>
 </div>

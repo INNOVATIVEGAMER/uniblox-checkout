@@ -295,7 +295,7 @@ idempotency_keys
 <tr><td class="m GET">GET</td><td><code>/products</code></td><td>List products: <code>[{ id, name, pricePaise, stock }]</code></td><td>200</td><td>None</td></tr>
 <tr><td class="m POST">POST</td><td><code>/carts</code></td><td>Create an empty cart</td><td>201 cart view</td><td>None</td></tr>
 <tr><td class="m GET">GET</td><td><code>/carts/:id?couponCode=</code></td><td>The cart view. With <code>couponCode</code>, it previews the discount and total without reserving anything</td><td>200</td><td>400 VALIDATION_ERROR, 404 CART_NOT_FOUND, 422 COUPON_INVALID, 409 COUPON_RESERVED, 409 COUPON_ALREADY_REDEEMED</td></tr>
-<tr><td class="m PUT">PUT</td><td><code>/carts/:id/items/:productId</code></td><td><strong>Set</strong> the quantity, covering both add and change. <code>{ "quantity": 1..1000 }</code></td><td>201 if added, 200 if updated (cart view)</td><td>400 VALIDATION_ERROR, 404 CART_NOT_FOUND, 404 PRODUCT_NOT_FOUND, 409 CART_PAYMENT_PENDING, 409 CART_CHECKED_OUT, 409 INSUFFICIENT_STOCK, 503 LOCK_TIMEOUT</td></tr>
+<tr><td class="m PUT">PUT</td><td><code>/carts/:id/items/:productId</code></td><td><strong>Set</strong> the quantity, covering both add and change. <code>{ "quantity": 1..1000 }</code></td><td>201 if added, 200 if updated (cart view)</td><td>400 VALIDATION_ERROR, 404 CART_NOT_FOUND, 404 PRODUCT_NOT_FOUND, 409 CART_PAYMENT_PENDING, 409 CART_CHECKED_OUT, 409 INSUFFICIENT_STOCK, 422 CART_LINE_LIMIT, 503 LOCK_TIMEOUT</td></tr>
 <tr><td class="m DELETE">DELETE</td><td><code>/carts/:id/items/:productId</code></td><td>Remove a line. Removing a line that isn't there also succeeds</td><td>200 (cart view)</td><td>400 VALIDATION_ERROR, 404 CART_NOT_FOUND, 409 CART_PAYMENT_PENDING, 409 CART_CHECKED_OUT, 503 LOCK_TIMEOUT</td></tr>
 <tr><td class="m POST">POST</td><td><code>/carts/:id/checkout</code></td><td>Place the order. Header <code>Idempotency-Key</code> (required). Body <code>{ "expectedTotalPaise", "paymentToken", "couponCode"? }</code></td><td>201 paid order. 202 pending order, with <code>Retry-After: 5</code></td><td>400 VALIDATION_ERROR, 400 IDEMPOTENCY_KEY_INVALID, 402 PAYMENT_FAILED, 404 CART_NOT_FOUND, 409 CART_CHECKED_OUT, 409 CART_PAYMENT_PENDING, 409 INSUFFICIENT_STOCK, 409 PRICE_CHANGED, 409 COUPON_RESERVED, 409 COUPON_ALREADY_REDEEMED, 422 CART_EMPTY, 422 COUPON_INVALID, 422 IDEMPOTENCY_KEY_REUSED, 503 LOCK_TIMEOUT</td></tr>
 <tr><td class="m GET">GET</td><td><code>/orders/:id</code></td><td>The order view</td><td>200</td><td>400 VALIDATION_ERROR, 404 ORDER_NOT_FOUND</td></tr>
@@ -590,6 +590,7 @@ eligible           = next_milestone &lt;= reached_milestones</code></pre>
 <tr><td>409</td><td>COUPON_RESERVED</td><td>The coupon is held by a pending payment, at checkout or in the preview</td><td><span class="tag trans">transient</span></td></tr>
 <tr><td>409</td><td>COUPON_ALREADY_REDEEMED</td><td>The coupon is already used, at checkout or in the preview</td><td><span class="tag final">final</span></td></tr>
 <tr><td>409</td><td>NO_ELIGIBLE_MILESTONE</td><td>Coupon generation with nothing unrewarded</td><td>n/a</td></tr>
+<tr><td>422</td><td>CART_LINE_LIMIT</td><td>A PUT adding a new line to a cart that already has 50 lines (<code>MAX_CART_LINES</code>, which keeps money arithmetic below 2^53). Changing an existing line still succeeds. <code>details: { maxLines }</code></td><td>n/a</td></tr>
 <tr><td>422</td><td>CART_EMPTY</td><td>Checkout of an empty cart</td><td><span class="tag final">final</span></td></tr>
 <tr><td>422</td><td>COUPON_INVALID</td><td>Unknown coupon code, at checkout or in the preview</td><td><span class="tag final">final</span></td></tr>
 <tr><td>422</td><td>IDEMPOTENCY_KEY_REUSED</td><td>The same key with a different request</td><td>Not stored</td></tr>
@@ -604,7 +605,7 @@ eligible           = next_milestone &lt;= reached_milestones</code></pre>
 new AppError('CART_NOT_FOUND', details?)    // status and final come from ERRORS</code></pre>
 <p class="muted"><code>onError</code> builds every response with <code>toErrorBody(err)</code>, the same builder <code>completeKeyWithError</code> uses, so a stored error and a live error can't differ.</p>
 <ul class="muted">
-  <li>A Hono <code>HTTPException</code> (for example, malformed JSON) becomes VALIDATION_ERROR.</li>
+  <li>Hono's 400 <code>HTTPException</code> for malformed JSON becomes VALIDATION_ERROR. Any other <code>HTTPException</code> becomes 500 INTERNAL.</li>
   <li>A database error is recognised as <code>err instanceof DrizzleQueryError</code>. Its <code>err.cause</code> is then safe-parsed with <code>{ code: z.string(), constraint: z.string().optional() }</code>. <code>55P03</code> becomes 503, and anything else becomes 500.</li>
   <li>Business conflicts never reach the mapper, because explicit checks raise them first. The constraints are backstops.</li>
 </ul>

@@ -1,6 +1,6 @@
 import { type Hook, zValidator } from '@hono/zod-validator';
 import { DrizzleQueryError } from 'drizzle-orm/errors';
-import type { Env, ErrorHandler, NotFoundHandler, ValidationTargets } from 'hono';
+import type { Env, ErrorHandler, NotFoundHandler } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
@@ -57,8 +57,11 @@ const validationHook: Hook<unknown, Env, string> = (result, c) => {
   );
 };
 
-export const validate = <Target extends keyof ValidationTargets, T extends z.ZodType>(target: Target, schema: T) =>
-  zValidator(target, schema, validationHook);
+// No 'form' target: toAppError labels every HTTPException 400 as a json parse failure.
+export const validate = <Target extends 'json' | 'param' | 'query' | 'header', T extends z.ZodType>(
+  target: Target,
+  schema: T,
+) => zValidator(target, schema, validationHook);
 
 const pgErrorSchema = z.object({ code: z.string(), constraint: z.string().optional() });
 
