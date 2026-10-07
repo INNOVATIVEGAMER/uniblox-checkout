@@ -182,6 +182,10 @@ const rows: Row[] = [
       ['fractional expectedTotalPaise', { ...CHECKOUT_BODY, expectedTotalPaise: 1.5 }, 'json.expectedTotalPaise'],
       ['expectedTotalPaise as a string', { ...CHECKOUT_BODY, expectedTotalPaise: '100' }, 'json.expectedTotalPaise'],
       ['missing paymentToken', { expectedTotalPaise: 0 }, 'json.paymentToken'],
+      ['empty couponCode', { ...CHECKOUT_BODY, couponCode: '' }, 'json.couponCode'],
+      ['whitespace-only couponCode', { ...CHECKOUT_BODY, couponCode: '   ' }, 'json.couponCode'],
+      ['couponCode over 64 characters', { ...CHECKOUT_BODY, couponCode: 'A'.repeat(65) }, 'json.couponCode'],
+      ['couponCode as a number', { ...CHECKOUT_BODY, couponCode: 10 }, 'json.couponCode'],
       ['unknown field beside the checkout body', { ...CHECKOUT_BODY, note: 'gift' }, undefined],
     ] satisfies [string, unknown, string | undefined][]
   ).map(([label, body, detailPath]): Row => ({

@@ -73,9 +73,13 @@ Every error uses one envelope:
 | 409    | `CART_PAYMENT_PENDING`    | A payment for the cart is in progress. Retry once it resolves. `details` is `{ orderId }`           |
 | 409    | `INSUFFICIENT_STOCK`      | The requested quantity is above the stock available. `details` lists `{ productId, requested, available }` for every short line |
 | 409    | `PRICE_CHANGED`           | `expectedTotalPaise` doesn't match the cart's current total. `details` is `{ subtotalPaise, discountPaise, totalPaise }` |
+| 409    | `COUPON_RESERVED`         | The coupon is held by a payment in progress. Retry once it resolves                                 |
+| 409    | `COUPON_ALREADY_REDEEMED` | The coupon has already been used                                                                    |
+| 409    | `NO_ELIGIBLE_MILESTONE`   | Coupon generation with no milestone waiting. `details` is `{ paidOrders, nextMilestoneAt }`         |
 | 422    | `CART_LINE_LIMIT`         | Adding a new line to a cart that already has 50 lines. `details` is `{ maxLines }`                  |
 | 422    | `CART_EMPTY`              | Checking out a cart with no lines                                                                   |
-| 422    | `IDEMPOTENCY_KEY_REUSED`  | The `Idempotency-Key` was already used with a different cart, total or payment token               |
+| 422    | `COUPON_INVALID`          | No coupon has this code                                                                             |
+| 422    | `IDEMPOTENCY_KEY_REUSED`  | The `Idempotency-Key` was already used with a different cart, coupon, total or payment token       |
 | 500    | `INTERNAL`                | An unexpected failure. It is logged, and no internals are returned                                  |
 | 503    | `LOCK_TIMEOUT`            | A row lock was not granted within `LOCK_TIMEOUT_MS`. Safe to retry                                  |
 
@@ -144,6 +148,7 @@ The cart view, returned by every cart route:
     }
   ],
   "subtotalPaise": 104997,
+  "coupon": null,
   "discountPaise": 0,
   "totalPaise": 104997
 }
@@ -152,7 +157,9 @@ The cart view, returned by every cart route:
 - **`status`:** `open`, `pending_payment` or `checked_out`. Only an `open` cart can change.
 - **`orderId`:** the cart's live order: the pending one while a payment is in progress, the paid one once checked out, and `null` while the cart is open (a declined order doesn't count).
 - **`lines`:** ordered by product ID. `available` is `stock >= quantity` right now, so it can turn false after an admin lowers the stock.
-- **`totalPaise`:** `subtotalPaise − discountPaise`, and exactly the value checkout accepts as `expectedTotalPaise`. The discount stays 0 until coupons arrive.
+- **`coupon`:** `null`, or `{ code, percentOff }` when `GET /carts/:id?couponCode=` previews one.
+- **`discountPaise`:** `floor(subtotalPaise × percentOff / 100)` with a previewed coupon, otherwise 0.
+- **`totalPaise`:** `subtotalPaise − discountPaise`, and exactly the value checkout accepts as `expectedTotalPaise` (with the same `couponCode`).
 
 ### `POST /carts`
 
@@ -160,14 +167,23 @@ Creates an empty cart. No body.
 
 **201**: the cart view, with no lines.
 
-### `GET /carts/:id`
+### `GET /carts/:id?couponCode=`
 
 **200**: the cart view, in any status.
 
-| Status | Code               | When                        |
-| ------ | ------------------ | --------------------------- |
-| 400    | `VALIDATION_ERROR` | `:id` is not a UUID         |
-| 404    | `CART_NOT_FOUND`   | No cart has this ID         |
+With `couponCode`, the view previews the coupon: it shows `coupon`, the discount and the discounted total, and reserves nothing. The preview succeeds only for an available coupon. Otherwise it returns the same error checkout would, so it never shows a total that checkout would reject. The code is trimmed and uppercased, and a typed `O`, `I` or `L` reads as `0`, `1` or `1`, so `save10-m1-…` works.
+
+```http
+GET /carts/5f0c6a0e-3b1d-4c2a-9e7f-1a2b3c4d5e6f?couponCode=SAVE10-M1-7K3QZ9XA
+```
+
+| Status | Code                      | When                                                   |
+| ------ | ------------------------- | ------------------------------------------------------ |
+| 400    | `VALIDATION_ERROR`        | `:id` is not a UUID, or `couponCode` is empty, blank, over 64 characters, or repeated |
+| 404    | `CART_NOT_FOUND`          | No cart has this ID                                    |
+| 409    | `COUPON_RESERVED`         | The coupon is held by a payment in progress            |
+| 409    | `COUPON_ALREADY_REDEEMED` | The coupon has already been used                       |
+| 422    | `COUPON_INVALID`          | No coupon has this code                                |
 
 ### `PUT /carts/:id/items/:productId`
 
@@ -229,19 +245,21 @@ Places the order and pays for it, in one request. Stock is reserved, the payment
 | `pm_card_chargeDeclinedInsufficientFunds` | Declined, reason `insufficient_funds`       |
 | anything else                             | Declined, reason `invalid_payment_method`   |
 
+- **`couponCode`:** optional, 1–64 characters after trimming, case-insensitive, with `O` read as `0` and `I` or `L` as `1`. One coupon per order. Preview it first with `GET /carts/:id?couponCode=` to get the discounted `expectedTotalPaise`. The coupon is held while the payment runs, redeemed when it is approved, and released when it is declined. A 100% coupon gives a total of 0, which is paid without calling the gateway.
+
 ```http
 POST /carts/5f0c6a0e-3b1d-4c2a-9e7f-1a2b3c4d5e6f/checkout
 Content-Type: application/json
 Idempotency-Key: 8d2b6c1e-checkout-1
 
-{ "expectedTotalPaise": 104997, "paymentToken": "pm_card_visa" }
+{ "expectedTotalPaise": 94498, "paymentToken": "pm_card_visa", "couponCode": "SAVE10-M1-7K3QZ9XA" }
 ```
 
 **201**: the order was paid. The body is the order view (see `GET /orders/:id`), and the cart is now `checked_out`.
 
 **202**, with `Retry-After: 5`: the payment's outcome is unknown, for example because the gateway timed out. The order stays `pending_payment` and keeps its stock reserved. Retry the same request with the same key to get its current state. Resolving these orders arrives with #5.
 
-**402 `PAYMENT_FAILED`**: the payment was declined. The order is `failed`, its stock is released, and the cart is open again, so the client can pay with a new key.
+**402 `PAYMENT_FAILED`**: the payment was declined. The order is `failed`, its stock and coupon are released, and the cart is open again, so the client can pay with a new key.
 
 ```json
 { "error": { "code": "PAYMENT_FAILED", "message": "The payment was declined", "details": { "orderId": "…", "reason": "card_declined" } } }
@@ -259,8 +277,11 @@ A retry with the same key never charges again. It returns the earlier outcome wi
 | 409    | `CART_PAYMENT_PENDING`    | Another payment for this cart is in progress                        | Not stored |
 | 409    | `INSUFFICIENT_STOCK`      | A line needs more than the stock available, including stock held by a payment in progress | Stored |
 | 409    | `PRICE_CHANGED`           | `expectedTotalPaise` doesn't match the current total                | Stored     |
+| 409    | `COUPON_RESERVED`         | Another payment in progress holds the coupon                        | Not stored |
+| 409    | `COUPON_ALREADY_REDEEMED` | The coupon has already been used                                    | Stored     |
 | 422    | `CART_EMPTY`              | The cart has no lines                                               | Stored     |
-| 422    | `IDEMPOTENCY_KEY_REUSED`  | The key was used with a different cart, total or token              | Not stored |
+| 422    | `COUPON_INVALID`          | No coupon has this code                                             | Stored     |
+| 422    | `IDEMPOTENCY_KEY_REUSED`  | The key was used with a different cart, coupon, total or token      | Not stored |
 | 500    | `INTERNAL`                | An unexpected failure                                               | Not stored, unless the order already exists |
 | 503    | `LOCK_TIMEOUT`            | A row stayed locked for longer than `LOCK_TIMEOUT_MS`               | Not stored, unless the order already exists |
 
@@ -276,8 +297,9 @@ A 500 or 503 that happens after the charge leaves the order `pending_payment`, a
   "cartId": "5f0c6a0e-3b1d-4c2a-9e7f-1a2b3c4d5e6f",
   "status": "paid",
   "subtotalPaise": 104997,
-  "discountPaise": 0,
-  "totalPaise": 104997,
+  "discountPaise": 10499,
+  "totalPaise": 94498,
+  "coupon": { "code": "SAVE10-M1-7K3QZ9XA", "percentOff": 10 },
   "paymentRef": "ch_…",
   "failureReason": null,
   "createdAt": "2026-10-07T10:00:00.000Z",
@@ -289,6 +311,7 @@ A 500 or 503 that happens after the charge leaves the order `pending_payment`, a
 ```
 
 - **`status`:** `pending_payment`, `paid` or `failed`.
+- **`coupon`:** `null`, or the coupon used. `percentOff` is the one applied to this order, frozen at checkout.
 - **`paymentRef`:** the gateway's charge reference. It is `null` while pending, after a decline, and for a zero total, which is never charged.
 - **`failureReason`:** the decline reason, set only on a `failed` order.
 
@@ -296,3 +319,39 @@ A 500 or 503 that happens after the charge leaves the order `pending_payment`, a
 | ------ | ------------------ | ------------------------ |
 | 400    | `VALIDATION_ERROR` | `:id` is not a UUID      |
 | 404    | `ORDER_NOT_FOUND`  | No order has this ID     |
+
+### Coupons (admin)
+
+Every `COUPON_EVERY_N_ORDERS` (n) **paid** orders reach a milestone, and each milestone earns one coupon worth `COUPON_PERCENT_OFF` (x) percent. Pending and failed orders don't count. An admin generates coupons one at a time, oldest unrewarded milestone first, and nothing lapses. A coupon is a bearer code: anyone holding it can use it, once. Its `percentOff` is frozen when it is generated.
+
+The coupon view:
+
+```json
+{
+  "id": "3c1e5a7b-9d2f-4b6a-8c0e-2f4a6b8c0d1e",
+  "code": "SAVE10-M1-7K3QZ9XA",
+  "milestone": 1,
+  "percentOff": 10,
+  "status": "available",
+  "createdAt": "2026-10-07T10:00:00.000Z",
+  "redeemedAt": null
+}
+```
+
+- **`code`:** `SAVE{x}-M{k}-` and 8 characters of Crockford base32 (uppercase, no `I`, `L`, `O` or `U`).
+- **`status`:** `available`, `reserved` while a payment holding it is in progress, or `redeemed`.
+
+### `POST /admin/coupons` (admin)
+
+Generates a coupon for the oldest milestone that has none. No body. Concurrent calls queue on an advisory lock, so each one rewards a different milestone.
+
+**201**: `{ "coupon": <coupon view>, "remainingEligible": 0 }`. `remainingEligible` counts the milestones still waiting after this one.
+
+| Status | Code                    | When                                                                          |
+| ------ | ----------------------- | ----------------------------------------------------------------------------- |
+| 409    | `NO_ELIGIBLE_MILESTONE` | Every reached milestone already has a coupon. `details` is `{ paidOrders, nextMilestoneAt }` |
+| 503    | `LOCK_TIMEOUT`          | Another generation held the lock for longer than `LOCK_TIMEOUT_MS`            |
+
+### `GET /admin/coupons` (admin)
+
+**200**: every coupon view, in milestone order.

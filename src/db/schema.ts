@@ -4,6 +4,7 @@ import { MAX_LINE_QUANTITY, MAX_UNIT_PRICE_PAISE } from '../domain/money';
 
 export const CART_STATUSES = ['open', 'pending_payment', 'checked_out'] as const;
 export const ORDER_STATUSES = ['pending_payment', 'paid', 'failed'] as const;
+export const COUPON_STATUSES = ['available', 'reserved', 'redeemed'] as const;
 
 // drizzle-kit writes an interpolated value into a CHECK as a `$1` placeholder, so constants go in through sql.raw.
 const sqlList = (values: readonly string[]) => sql.raw(values.map((v) => `'${v}'`).join(', '));
@@ -52,6 +53,26 @@ export const cartItems = pgTable(
   ],
 );
 
+export const coupons = pgTable(
+  'coupons',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    code: text('code').notNull().unique(),
+    milestone: integer('milestone').notNull().unique(),
+    percentOff: integer('percent_off').notNull(),
+    status: text('status', { enum: COUPON_STATUSES })
+      .notNull()
+      .default('available'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    redeemedAt: timestamp('redeemed_at', { withTimezone: true }),
+  },
+  (t) => [
+    check('coupons_status_valid', sql`${t.status} IN (${sqlList(COUPON_STATUSES)})`),
+    check('coupons_percent_off_range', sql`${t.percentOff} BETWEEN 1 AND 100`),
+    check('coupons_redeemed_at_iff_redeemed', sql`(${t.status} = 'redeemed') = (${t.redeemedAt} IS NOT NULL)`),
+  ],
+);
+
 export const orders = pgTable(
   'orders',
   {
@@ -65,6 +86,8 @@ export const orders = pgTable(
     subtotalPaise: bigint('subtotal_paise', { mode: 'number' }).notNull(),
     discountPaise: bigint('discount_paise', { mode: 'number' }).notNull(),
     totalPaise: bigint('total_paise', { mode: 'number' }).notNull(),
+    couponId: uuid('coupon_id').references(() => coupons.id),
+    percentOff: integer('percent_off'),
     paymentRef: text('payment_ref'),
     failureReason: text('failure_reason'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -74,10 +97,15 @@ export const orders = pgTable(
     check('orders_status_valid', sql`${t.status} IN (${sqlList(ORDER_STATUSES)})`),
     check('orders_total_nonneg', sql`${t.totalPaise} >= 0`),
     check('orders_total_formula', sql`${t.totalPaise} = ${t.subtotalPaise} - ${t.discountPaise}`),
+    // Integer division truncates, which equals floor for non-negative values, so this matches discount() in money.ts.
+    check('orders_discount_formula', sql`${t.discountPaise} = COALESCE(${t.subtotalPaise} * ${t.percentOff} / 100, 0)`),
+    check('orders_coupon_percent_pair', sql`(${t.couponId} IS NULL) = (${t.percentOff} IS NULL)`),
+    check('orders_percent_off_range', sql`${t.percentOff} BETWEEN 1 AND 100`),
     check('orders_resolved_iff_not_pending', sql`(${t.status} = 'pending_payment') = (${t.resolvedAt} IS NULL)`),
     check('orders_failure_reason_iff_failed', sql`(${t.status} = 'failed') = (${t.failureReason} IS NOT NULL)`),
     check('orders_paid_has_payment_ref', sql`${t.status} <> 'paid' OR ${t.totalPaise} = 0 OR ${t.paymentRef} IS NOT NULL`),
     uniqueIndex('orders_live_cart_uq').on(t.cartId).where(sql`${t.status} <> 'failed'`),
+    uniqueIndex('orders_live_coupon_uq').on(t.couponId).where(sql`${t.status} <> 'failed'`),
   ],
 );
 

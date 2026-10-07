@@ -3,14 +3,17 @@ import type { Db, Tx } from '../../db/client';
 import { cartItems, carts, orders, products } from '../../db/schema';
 import { MAX_CART_LINES, priceLines } from '../../domain/money';
 import { AppError } from '../../errors';
+import { findAvailableCoupon } from '../coupons/service';
 
 type Cart = Pick<typeof carts.$inferSelect, 'id' | 'status'> & { orderId: string | null };
+
+type CouponView = { code: string; percentOff: number };
 
 const cartColumns = { id: carts.id, status: carts.status };
 
 const liveOrderOf = (cartId: typeof carts.id | string) => and(eq(orders.cartId, cartId), ne(orders.status, 'failed'));
 
-async function toCartView(db: Db | Tx, cart: Cart) {
+async function toCartView(db: Db | Tx, cart: Cart, coupon: CouponView | null) {
   const rows = await db
     .select({
       productId: cartItems.productId,
@@ -24,24 +27,30 @@ async function toCartView(db: Db | Tx, cart: Cart) {
     .where(eq(cartItems.cartId, cart.id))
     .orderBy(asc(cartItems.productId));
 
-  const priced = priceLines(rows.map(({ stock, ...line }) => ({ ...line, available: stock >= line.quantity })));
-  return { id: cart.id, status: cart.status, orderId: cart.orderId, ...priced };
+  const { lines, subtotalPaise, discountPaise, totalPaise } = priceLines(
+    rows.map(({ stock, ...line }) => ({ ...line, available: stock >= line.quantity })),
+    coupon?.percentOff ?? null,
+  );
+  return { id: cart.id, status: cart.status, orderId: cart.orderId, lines, subtotalPaise, coupon, discountPaise, totalPaise };
 }
 
 export async function createCart(db: Db) {
   const [cart] = await db.insert(carts).values({}).returning(cartColumns);
   if (!cart) throw new Error('INSERT … RETURNING produced no row');
-  return toCartView(db, { ...cart, orderId: null });
+  return toCartView(db, { ...cart, orderId: null }, null);
 }
 
-export async function loadCartView(db: Db, cartId: string) {
+/** The cart view. A coupon code previews the discount without reserving anything, and fails as checkout would. */
+export async function loadCartView(db: Db, cartId: string, couponCode: string | undefined) {
   const [cart] = await db
     .select({ ...cartColumns, orderId: orders.id })
     .from(carts)
     .leftJoin(orders, liveOrderOf(carts.id))
     .where(eq(carts.id, cartId));
   if (!cart) throw new AppError('CART_NOT_FOUND');
-  return toCartView(db, cart);
+  if (couponCode === undefined) return toCartView(db, cart, null);
+  const { code, percentOff } = await findAvailableCoupon(db, couponCode);
+  return toCartView(db, cart, { code, percentOff });
 }
 
 /**
@@ -76,13 +85,13 @@ export function setItemQuantity(db: Db, cartId: string, productId: string, quant
         .set({ quantity })
         .where(and(eq(cartItems.cartId, cartId), eq(cartItems.productId, productId)))
         .returning({ productId: cartItems.productId });
-      if (updated.length > 0) return { created: false, view: await toCartView(tx, cart) };
+      if (updated.length > 0) return { created: false, view: await toCartView(tx, cart, null) };
 
       const lineCount = await tx.$count(cartItems, eq(cartItems.cartId, cartId));
       if (lineCount >= MAX_CART_LINES) throw new AppError('CART_LINE_LIMIT', { maxLines: MAX_CART_LINES });
 
       await tx.insert(cartItems).values({ cartId, productId, quantity });
-      return { created: true, view: await toCartView(tx, cart) };
+      return { created: true, view: await toCartView(tx, cart, null) };
     },
     { isolationLevel: 'read committed' },
   );
@@ -93,7 +102,7 @@ export function removeItem(db: Db, cartId: string, productId: string) {
     async (tx) => {
       const cart = await lockOpenCart(tx, cartId);
       await tx.delete(cartItems).where(and(eq(cartItems.cartId, cartId), eq(cartItems.productId, productId)));
-      return toCartView(tx, cart);
+      return toCartView(tx, cart, null);
     },
     { isolationLevel: 'read committed' },
   );

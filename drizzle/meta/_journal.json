@@ -29,6 +29,13 @@
       "when": 1791348385047,
       "tag": "0003_checkout",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791351168845,
+      "tag": "0004_coupons",
+      "breakpoints": true
     }
   ]
 }

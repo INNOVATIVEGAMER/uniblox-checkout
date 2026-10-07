@@ -4,7 +4,7 @@ import { inject } from 'vitest';
 import { z } from 'zod';
 import { withCleanup } from './cleanup';
 
-export type LockTarget = { table: 'carts' | 'products'; id: string } | { advisoryLock: number };
+export type LockTarget = { table: 'carts' | 'products' | 'coupons'; id: string } | { advisoryLock: number };
 
 export type HeldLock = { pid: number; release: () => Promise<void> };
 

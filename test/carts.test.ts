@@ -11,6 +11,7 @@ import { expectOrder, newKey, postCheckout, visa } from './helpers/checkout';
 import { resetDb, snapshotDb } from './helpers/db';
 import { expectError } from './helpers/errors';
 import { type Gate, gated } from './helpers/gate';
+import { priceOf } from './helpers/products';
 
 const { app, appWith, db, pool } = createTestApp();
 
@@ -24,7 +25,7 @@ async function expectView(res: Response, status: number) {
   return cartViewSchema.parse(await res.json());
 }
 
-const keyboard = { productId: 'p_keyboard', name: 'Mechanical Keyboard', unitPricePaise: 499_900 };
+const keyboard = { productId: 'p_keyboard', name: 'Mechanical Keyboard', unitPricePaise: priceOf('p_keyboard') };
 
 describe('cart lifecycle', () => {
   it('POST creates an empty open cart, and GET returns it', async () => {
@@ -36,6 +37,7 @@ describe('cart lifecycle', () => {
       orderId: null,
       lines: [],
       subtotalPaise: 0,
+      coupon: null,
       discountPaise: 0,
       totalPaise: 0,
     });
@@ -47,7 +49,7 @@ describe('cart lifecycle', () => {
     const line = (quantity: number) => ({
       ...keyboard,
       quantity,
-      lineTotalPaise: 499_900 * quantity,
+      lineTotalPaise: priceOf('p_keyboard') * quantity,
       available: true,
     });
 
@@ -87,23 +89,24 @@ describe('T24 cart view', () => {
         {
           productId: 'p_cable',
           name: 'USB-C Cable',
-          unitPricePaise: 34_999,
+          unitPricePaise: priceOf('p_cable'),
           quantity: 3,
-          lineTotalPaise: 104_997,
+          lineTotalPaise: 3 * priceOf('p_cable'),
           available: true,
         },
         {
           productId: 'p_mouse',
           name: 'Wireless Mouse',
-          unitPricePaise: 129_950,
+          unitPricePaise: priceOf('p_mouse'),
           quantity: 1,
-          lineTotalPaise: 129_950,
+          lineTotalPaise: priceOf('p_mouse'),
           available: true,
         },
       ],
-      subtotalPaise: 234_947,
+      subtotalPaise: 3 * priceOf('p_cable') + priceOf('p_mouse'),
+      coupon: null,
       discountPaise: 0,
-      totalPaise: 234_947,
+      totalPaise: 3 * priceOf('p_cable') + priceOf('p_mouse'),
     });
   });
 
@@ -117,9 +120,9 @@ describe('T24 cart view', () => {
     const view = await getCart(cartId);
     expect(view.lines.map((l) => [l.productId, l.available, l.lineTotalPaise])).toEqual([
       ['p_lamp', false, 2],
-      ['p_mouse', true, 129_950],
+      ['p_mouse', true, priceOf('p_mouse')],
     ]);
-    expect(view.subtotalPaise).toBe(129_952);
+    expect(view.subtotalPaise).toBe(2 + priceOf('p_mouse'));
   });
 });
 
@@ -187,8 +190,6 @@ describe('T24 line cap', () => {
   });
 });
 
-const LAMP_PAISE = 249_900;
-
 const lockedWrites = [
   ['PUT changing a line', (cartId: string) => putItem(cartId, 'p_lamp', 2)],
   ['PUT adding a line', (cartId: string) => putItem(cartId, 'p_mouse', 1)],
@@ -215,7 +216,7 @@ describe('T24 a checked-out cart', () => {
 
   beforeEach(async () => {
     cartId = await cartWith({ p_lamp: 1 });
-    orderId = (await expectOrder(await postCheckout(app, cartId, newKey(), visa(LAMP_PAISE)), 201)).id;
+    orderId = (await expectOrder(await postCheckout(app, cartId, newKey(), visa(priceOf('p_lamp'))), 201)).id;
   });
 
   it.each(lockedWrites)('rejects %s with 409 CART_CHECKED_OUT and changes nothing', async (_label, send) => {
@@ -235,7 +236,7 @@ describe('T24 a cart whose payment is pending (gated)', () => {
     gate = gated(new FakeGateway(), { at: 'before' });
     cartId = await cartWith({ p_lamp: 1 });
     pending = postCheckout(appWith(gate.gateway), cartId, newKey(), {
-      expectedTotalPaise: LAMP_PAISE,
+      expectedTotalPaise: priceOf('p_lamp'),
       paymentToken: 'pm_card_chargeDeclined',
     });
     await gate.entered();

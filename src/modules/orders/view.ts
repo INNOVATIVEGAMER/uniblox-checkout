@@ -1,6 +1,6 @@
 import { asc, eq } from 'drizzle-orm';
 import type { Db } from '../../db/client';
-import { orderItems, orders } from '../../db/schema';
+import { coupons, orderItems, orders } from '../../db/schema';
 import { AppError, toErrorBody } from '../../errors';
 
 export const RETRY_AFTER_SECONDS = 5;
@@ -12,6 +12,8 @@ const orderColumns = {
   subtotalPaise: orders.subtotalPaise,
   discountPaise: orders.discountPaise,
   totalPaise: orders.totalPaise,
+  couponCode: coupons.code,
+  percentOff: orders.percentOff,
   paymentRef: orders.paymentRef,
   failureReason: orders.failureReason,
   createdAt: orders.createdAt,
@@ -26,11 +28,18 @@ const lineColumns = {
   lineTotalPaise: orderItems.lineTotalPaise,
 };
 
+// percentOff comes from the order, not the coupon, so the view shows the discount that was actually applied.
+function toCouponView(code: string | null, percentOff: number | null) {
+  if (code === null || percentOff === null) return null;
+  return { code, percentOff };
+}
+
 export async function loadOrderView(db: Db, orderId: string) {
-  const [order] = await db.select(orderColumns).from(orders).where(eq(orders.id, orderId));
-  if (!order) throw new AppError('ORDER_NOT_FOUND');
+  const [row] = await db.select(orderColumns).from(orders).leftJoin(coupons, eq(coupons.id, orders.couponId)).where(eq(orders.id, orderId));
+  if (!row) throw new AppError('ORDER_NOT_FOUND');
   const lines = await db.select(lineColumns).from(orderItems).where(eq(orderItems.orderId, orderId)).orderBy(asc(orderItems.productId));
-  return { ...order, lines };
+  const { couponCode, percentOff, ...order } = row;
+  return { ...order, coupon: toCouponView(couponCode, percentOff), lines };
 }
 
 export type OrderView = Awaited<ReturnType<typeof loadOrderView>>;

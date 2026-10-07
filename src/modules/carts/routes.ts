@@ -3,19 +3,22 @@ import { z } from 'zod';
 import type { Db } from '../../db/client';
 import { MAX_LINE_QUANTITY } from '../../domain/money';
 import { validate } from '../../errors';
+import { couponCodeSchema } from '../coupons/code';
 import { productIdSchema } from '../products/id';
 import { cartParamsSchema } from './id';
 import { createCart, loadCartView, removeItem, setItemQuantity } from './service';
 
 const cartItemParamsSchema = cartParamsSchema.extend({ productId: productIdSchema });
 
+const cartQuerySchema = z.object({ couponCode: couponCodeSchema.optional() });
+
 const setQuantitySchema = z.strictObject({ quantity: z.int().min(1).max(MAX_LINE_QUANTITY) });
 
 export function cartsRoutes({ db }: { db: Db }) {
   return new Hono()
     .post('/carts', async (c) => c.json(await createCart(db), 201))
-    .get('/carts/:id', validate('param', cartParamsSchema), async (c) => {
-      return c.json(await loadCartView(db, c.req.valid('param').id));
+    .get('/carts/:id', validate('param', cartParamsSchema), validate('query', cartQuerySchema), async (c) => {
+      return c.json(await loadCartView(db, c.req.valid('param').id, c.req.valid('query').couponCode));
     })
     .put(
       '/carts/:id/items/:productId',

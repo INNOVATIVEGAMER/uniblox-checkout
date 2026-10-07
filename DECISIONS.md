@@ -11,10 +11,13 @@ _Consolidated table (I1–I15, where each is enforced, and the test that proves 
 - **I1 (stock never goes below zero):** reserve locks the cart's products `ORDER BY id FOR NO KEY UPDATE` and checks every line before it decrements anything. `CHECK (stock >= 0)` is the backstop. T1 and T2.
 - **I2 (a cart has at most one live order):** reserve locks the cart and requires `status = 'open'`. The partial unique index `orders_live_cart_uq` (`cart_id WHERE status <> 'failed'`) is the backstop. T5.
 - **I3 (a retried checkout never creates a second order or charges twice):** the key is claimed as reserve's first statement, and a key that has an order or a stored response is replayed. The fake gateway's charges are idempotent per order ID. The key's primary key and `UNIQUE (order_id)` are the backstops. T3, T4, T30.
+- **I4 (a coupon is held by at most one live order, and redeemed at most once):** reserve locks the coupon `FOR NO KEY UPDATE` and requires `status = 'available'`. The partial unique index `orders_live_coupon_uq` (`coupon_id WHERE status <> 'failed'`) is the backstop. T6.
 - **I5 (a checkout that fails before payment consumes nothing):** every check in reserve runs before its first write. The savepoint is defence in depth: removing it alone fails no test (see the mutation log). T21, T22.
-- **I6 (a decline releases what it held), stock and cart:** `finalizeOrder` adds the reserved units back on top of the current stock and reopens the cart, in the transaction that marks the order failed. The coupon half arrives with #4. T13, T18.
-- **I10 (money):** totals never go negative, `total = subtotal − discount`, and `discount = floor(subtotal × percent / 100)`. The pure functions are in `src/domain/money.ts`, and T27 proves them. Migration 0003 adds `total >= 0`, `total = subtotal − discount` and `line_total = unit_price × quantity` as CHECKs. The discount-formula CHECK needs `percent_off`, so it arrives with #4.
-- **I11 (an order still explains itself after products change):** order lines snapshot the name, unit price, quantity and line total. T23.
+- **I6 (a decline releases what it held):** `finalizeOrder` adds the reserved units back on top of the current stock, reopens the cart and makes the coupon `available` again, in the transaction that marks the order failed. T13, T18.
+- **I8 (a coupon's status agrees with its live order):** `reserved` while the order is pending, `redeemed` once it is paid, `available` after a decline. Reserve and `finalizeOrder` change the coupon in the same transaction as the order. A CHECK can't span two rows, so the only backstop is `CHECK ((status = 'redeemed') = (redeemed_at IS NOT NULL))` on the coupon itself. T6, T13.
+- **I9 (at most one coupon per milestone):** `UNIQUE (coupons.milestone)` is the guarantee. Generation takes `pg_advisory_xact_lock` first, so concurrent calls queue instead of colliding on the constraint. T9.
+- **I10 (money):** totals never go negative, `total = subtotal − discount`, and `discount = floor(subtotal × percent / 100)`. The pure functions are in `src/domain/money.ts`, and T27 proves them. Migration 0003 adds `total >= 0`, `total = subtotal − discount` and `line_total = unit_price × quantity` as CHECKs. Migration 0004 adds `discount = COALESCE(subtotal × percent_off / 100, 0)` and the pairing `(coupon_id IS NULL) = (percent_off IS NULL)`. Postgres integer division truncates, which equals floor for non-negative values, so the CHECK matches `discount()` exactly.
+- **I11 (an order still explains itself after products change):** order lines snapshot the name, unit price, quantity and line total, and the order stores the coupon's `percent_off`. T23.
 - **I12 (a cart changes only while it is open):** PUT and DELETE lock the cart row `FOR NO KEY UPDATE` and require `status = 'open'`, in the same transaction as the write. That one guard covers `pending_payment` and `checked_out`. The T24 locked-status rows drive both states through a real checkout, and a decline reopens the cart for writes.
 - **I13 (an order leaves `pending_payment` exactly once):** `finalizeOrder` claims the order with `UPDATE … WHERE status = 'pending_payment'`, and does nothing else when no row changed. Its race tests (T10, T11) need recovery, so they arrive with #5.
 - **I14 (a committed key has exactly one replay source):** the claim and its outcome (the order ID set in reserve, or the stored error) commit in the same transaction. `CHECK (order_id IS NULL OR response_status IS NULL)` rules out both at once. T20.
@@ -31,17 +34,27 @@ _Filled in by each issue as it resolves them: checkout (#3), coupons (#4), pendi
 - **Prices are live.** Cart lines store no price. Each view reads the current price, and the order snapshots it once, at checkout.
 - **Carts have no `updated_at`.** The architecture lists one, but nothing reads it, and a column with that name that never changed would mislead. Carts keep `created_at`.
 - **The view's `orderId` is the cart's live order.** It is the pending order while a payment is in flight and the paid order once checked out. A declined order is not live, so a reopened cart shows `null`. The two locked-status errors carry the same `details: { orderId }`.
-- **The view's `coupon` is not there yet.** #4 adds it with the preview.
+- **The view's `coupon` is `null` unless the request previews one.** `GET /carts/:id?couponCode=` fills it in (see Coupons).
 
 ### Checkout
 
 - **`expectedTotalPaise` is required.** The client sends the total it showed the customer, and a mismatch gets `409 PRICE_CHANGED` with the current breakdown. The cart view's `totalPaise` is exactly the value checkout accepts, because both price the lines with `priceLines` in `src/domain/money.ts`.
-- **The first business outcome of a key is final (the Stripe rule).** Once reserve has started, a final error (`CART_NOT_FOUND`, `CART_CHECKED_OUT`, `INSUFFICIENT_STOCK`, `PRICE_CHANGED`, `CART_EMPTY`) is stored on the key, and the same key replays it even after the cause is fixed. A new attempt needs a new key.
-- **Only a hold on the cart is transient.** `CART_PAYMENT_PENDING` is stored nowhere, so the same key can succeed once the other payment resolves. Stock held by a payment that is still in flight is a final `INSUFFICIENT_STOCK`: the client can't know whether that payment will release it.
+- **The first business outcome of a key is final (the Stripe rule).** Once reserve has started, a final error (`CART_NOT_FOUND`, `CART_CHECKED_OUT`, `INSUFFICIENT_STOCK`, `PRICE_CHANGED`, `CART_EMPTY`, `COUPON_INVALID`, `COUPON_ALREADY_REDEEMED`) is stored on the key, and the same key replays it even after the cause is fixed. A new attempt needs a new key.
+- **Only a hold on the cart or the coupon is transient.** `CART_PAYMENT_PENDING` and `COUPON_RESERVED` are stored nowhere, so the same key can succeed once the other payment resolves. Stock held by a payment that is still in flight is a final `INSUFFICIENT_STOCK`: the client can't know whether that payment will release it.
 - **A decline reopens the cart.** The order is `failed`, its stock is released, and the cart is `open` with its lines intact. The same key replays the 402, and a new key can pay.
 - **An unknown payment outcome holds the reservation.** When the gateway throws or times out, the order stays `pending_payment` and the response is 202 with `Retry-After: 5`. Retrying the same key replays the current state. Resolving these orders is #5.
-- **A zero total is never charged.** A cart can total 0 today through a product priced at 0, and with a 100% coupon in #4. It is paid with `payment_ref` null and no gateway call.
-- **The cart ID is lowercased before hashing.** Postgres compares UUIDs case-insensitively, so without this the same cart sent in upper case would be a different request and get 422.
+- **A zero total is never charged.** A cart can total 0 through a product priced at 0, or with a 100% coupon (T19). It is paid with `payment_ref` null and no gateway call.
+- **The cart ID is lowercased before hashing.** Postgres compares UUIDs case-insensitively, so without this the same cart sent in upper case would be a different request and get 422. The coupon code is normalised by `couponCodeSchema` for the same reason.
+
+### Coupons
+
+- **A coupon is a bearer code.** Anyone holding the code can use it. There is no customer identity to tie it to.
+- **Milestones count every paid order**, discounted or not. Pending and failed orders don't count. The k-th milestone is reached at paid order k × n. A count, not a sequence: a sequence leaves gaps when a transaction rolls back, so it would count failed checkouts.
+- **One coupon per call, oldest unrewarded milestone first.** Nothing lapses. The 201 carries `remainingEligible`, the milestones still waiting after this one. Nothing waiting is `409 NO_ELIGIBLE_MILESTONE` with `{ paidOrders, nextMilestoneAt }`.
+- **`percent_off` is frozen** on the coupon when it is generated, and copied onto the order at reserve. Changing `COUPON_PERCENT_OFF` later affects only new coupons, and an order always shows the discount it was charged. Changing `COUPON_EVERY_N_ORDERS` later is deferred, because it would re-map past milestones.
+- **At most one coupon per order, and no expiry.**
+- **A coupon held by a pending payment is `409 COUPON_RESERVED`, transient.** It may become available again if that payment is declined.
+- **The preview checks the coupon whatever the cart's status.** It is a view, not a checkout: on the cart whose own pending order holds the coupon, it returns `COUPON_RESERVED`.
 
 ## Material decisions
 
@@ -154,15 +167,16 @@ For HTTP, Express and Fastify were the alternatives to Hono. For validation, the
 
 | Transaction   | Locks, in order                                                    |
 | ------------- | ------------------------------------------------------------------ |
-| Reserve       | key (insert) → cart → products by ID. Then it updates its own key row |
-| finalizeOrder | cart → order (conditional update) → products by ID, declines only  |
+| Reserve       | key (insert) → cart → products by ID → coupon. Then it updates its own key row |
+| finalizeOrder | cart → order (conditional update) → products by ID, declines only → coupon |
 | Cart PUT / DELETE | cart                                                           |
+| Coupon generation | advisory lock → coupon insert                                  |
 | PATCH product | the product row                                                    |
 
 **Why:**
 
 - **Deterministic and explainable.** Each step can be read off the code, with no retry loop. Contention is per product, and a hot product serialises only reserve phases, never payment calls.
-- **No deadlock.** Every transaction that takes more than one row lock takes cart, then products by ID, in that relative order. The key can't be part of a cycle: only the reserve that inserted a key writes to it, and a request waiting on a conflicting claim holds nothing, because the claim is its first statement.
+- **No deadlock.** Every transaction that takes more than one row lock takes cart, then products by ID, then coupon, in that relative order. `finalizeOrder` writes the coupon after the products on both paths. Written before them on a decline, it could deadlock with a reserve on another cart: finalize holding coupon C and waiting on product P, while the reserve holds P and waits on C. No test can force that interleaving, so the order is kept by reading the code, and stated in `finalizeOrder`'s comment. The key can't be part of a cycle: only the reserve that inserted a key writes to it, and a request waiting on a conflicting claim holds nothing, because the claim is its first statement.
 - **The conditional update alone** can't report every short line at once, and needs a rollback when line 3 fails after lines 1 and 2 succeeded. **SERIALIZABLE and version columns** need a retry loop, and under contention for limited stock most attempts fail and retry. **A mutex** breaks with a second instance.
 - **READ COMMITTED is deliberate.** After a lock wait, the waiter's next statement sees the newest committed row, such as a cart that is now `pending_payment`, with no serialisation error. At REPEATABLE READ the same point raises `40001`.
 - **The live order is read in a second statement.** After a lock wait, Postgres re-reads only the locked row (EvalPlanQual). A row joined in the same locking statement would come from the snapshot taken before the wait, and would miss the order the previous holder just created. So `lockOpenCart` locks the cart alone, then reads the live order.
@@ -192,7 +206,7 @@ For HTTP, Express and Fastify were the alternatives to Hono. For validation, the
   - a stored response → replay it.
 
   Every replay carries `Idempotent-Replayed: true`. Nothing was written, so the transaction just ends.
-- **The hash** is SHA-256 of `[cartId, expectedTotalPaise, paymentToken]`, after zod has parsed and normalised them.
+- **The hash** is SHA-256 of `[cartId, couponCode ?? null, expectedTotalPaise, paymentToken]`, after zod has parsed and normalised them.
 - **The storage rule** is the `final` flag on each code in the `ERRORS` table. Reserve's steps run inside a savepoint. A final error rolls back to the savepoint, stores `toErrorBody(err)` on the key, commits, and only then is returned. Anything else (a transient code, a 500, a 503) rolls back the whole transaction, key included. A 400 never reaches the claim.
 
 **Why:**
@@ -264,9 +278,70 @@ For HTTP, Express and Fastify were the alternatives to Hono. For validation, the
 
 **Consequences:** a client must read the cart before paying. The cart view's `totalPaise` and checkout share one pricing function, so the view's total is always accepted first time (T21).
 
+### Decision: Coupon generation under an advisory lock, with UNIQUE (milestone)
+
+**Context:** Two admins (or one retried call) can generate at once. Each call must reward a different milestone, and when two milestones are waiting, two concurrent calls should both succeed.
+
+**Options considered:**
+
+- `UNIQUE (milestone)` alone.
+- `SELECT … FOR UPDATE` on the latest coupon row.
+- `pg_advisory_xact_lock(<constant>)` as the transaction's first statement, plus `UNIQUE (milestone)`.
+
+**Choice:** one READ COMMITTED transaction: take `pg_advisory_xact_lock(COUPON_GENERATION_LOCK)`, count paid orders, read `max(milestone)`, compute the next milestone with `milestoneProgress` (`src/domain/milestones.ts`), then insert. The code's random suffix can collide, so the insert uses `ON CONFLICT (code) DO NOTHING` and retries with a fresh suffix, up to 3 times. A third collision is a 500.
+
+**Why:**
+
+- **UNIQUE alone turns a race into errors.** Every concurrent caller reads the same `max(milestone)`, computes the same milestone and inserts it. One wins, and the rest hit 23505 on `coupons_milestone_unique`. `ON CONFLICT (code)` doesn't cover that constraint, so they get **500s**, not 409s. Measured with the lock removed and no barrier: 9 runs out of 10 gave `[201, 500, 500, 500, 500]` from 4 paid orders, where two coupons were due.
+- **With the lock,** callers queue. Each reads the milestones its predecessors committed (READ COMMITTED takes a new snapshot per statement), so five calls with two milestones waiting give exactly two 201s and three 409s (T9). The UNIQUE stays as the guarantee.
+- **A row lock on the latest coupon** has nothing to lock before the first coupon exists.
+- **Reading the count at READ COMMITTED is safe** because a paid order is never un-paid (I13), so a stale count can only under-report eligibility.
+- The advisory lock is transaction-scoped, so it is released on commit or rollback and can't leak, and it waits under the same `lock_timeout` as every row lock (503).
+
+**Consequences:**
+
+- Generation is serialized globally. At one admin call at a time that costs nothing.
+- Removing UNIQUE (milestone) alone fails no test, because the lock already serializes (see the mutation log). It is a backstop, like the savepoint.
+
+### Decision: A coupon preview that returns checkout's error
+
+**Context:** The price guard requires `expectedTotalPaise`, so the client must be able to see the discounted total before paying.
+
+**Options considered:**
+
+- Attach the coupon to the cart.
+- Guard the subtotal instead of the total.
+- `GET /carts/:id?couponCode=` that previews, returning `200` with the coupon's status and no discount when it can't be used.
+- The same preview, returning the error checkout would.
+
+**Choice:** `GET /carts/:id?couponCode=` reads the coupon without a lock and runs the same `availableCoupon` guard as reserve. An available coupon gives `coupon: { code, percentOff }` and the discounted `discountPaise` and `totalPaise`. Otherwise it returns checkout's error: `422 COUPON_INVALID`, `409 COUPON_RESERVED` or `409 COUPON_ALREADY_REDEEMED`. The cart is checked first, so an unknown cart is 404.
+
+**Why:**
+
+- A preview never shows a total that checkout would reject. Both paths price with `priceLines`, so the preview's `totalPaise` is accepted first time (T21, with a cart where floor and round differ).
+- It reserves nothing and writes nothing, so GET stays safe (T24 compares a snapshot of every table).
+- Attaching the coupon to the cart adds a cart write and a release path for a coupon that may never be used.
+
+**Consequences:** the preview is a snapshot. The coupon can be taken between the preview and the checkout, and checkout then returns the same error the preview would have.
+
+### Decision: Coupon codes in uppercase Crockford base32
+
+**Context:** Codes are typed by people and normalised by one shared schema, `couponCodeSchema` (trim, uppercase, then Crockford's decoding of `I` and `L` as `1` and `O` as `0`), used by the checkout body and the preview query.
+
+**Options considered:** a mixed-case random suffix; sequential codes; an uppercase-only alphabet.
+
+**Choice:** `SAVE{x}-M{k}-{8 characters}`, the suffix drawn with `crypto.randomInt` from Crockford's base32 alphabet (`0-9` and `A-Z` without `I`, `L`, `O`, `U`).
+
+**Why:**
+
+- A mixed-case code would never match after the schema uppercases the input.
+- Crockford's alphabet drops the letters people confuse with digits, and its decoding reads a typed `I`, `L` or `O` as the digit it was mistaken for. No generated code contains those letters, the `SAVE{x}-M{k}-` prefix included, so the mapping never changes a real code.
+- The random suffix means a bearer code can't be guessed from its milestone. 32^8 ≈ 10^12 values make the collision retry a formality.
+
+**Consequences:** codes are case-insensitive for clients, and `O`/`0` and `I`/`L`/`1` are interchangeable. The length bound (1 to 64 after trimming) is a 400; any code inside it that doesn't exist is `422 COUPON_INVALID`.
+
 _Further decisions arrive with the issues that make them:_
 
-- Coupon generation and the advisory lock: #4.
 - Holding unknown payment outcomes: #5.
 - The report snapshot: #6.
 
@@ -280,10 +355,11 @@ Checkout is one request in three phases (see "Atomic phases, not an outbox"):
    3. lock the cart and require it to be open;
    4. load the lines, and get 422 if there are none;
    5. lock the products in ID order, and get 409 listing every short line;
-   6. price the lines, and check the price guard;
-   7. write: decrement stock, insert the order and its line snapshots, set the cart to `pending_payment`, and point the key at the order.
+   6. if a coupon is given, lock it by code and require it to be available (422, 409 final, or 409 transient);
+   7. price the lines with the coupon's `percent_off`, and check the price guard;
+   8. write: decrement stock, insert the order (with `coupon_id` and `percent_off`) and its line snapshots, set the coupon to `reserved`, set the cart to `pending_payment`, and point the key at the order.
 2. **Charge:** no transaction and no connection are held. A zero total is approved without a call.
-3. **Finalize** (`finalizeOrder`): approved or declined, using the conditional update on the order. An unknown outcome writes nothing.
+3. **Finalize** (`finalizeOrder`): approved or declined, using the conditional update on the order. Approved redeems the coupon; declined makes it available again. An unknown outcome writes nothing.
 
 The lock order, isolation level and key storage rule are in the decisions above. Pending recovery: #5.
 
@@ -366,7 +442,10 @@ For rounding, the options were round-half-up, banker's rounding, and floor.
 | 409    | `CART_PAYMENT_PENDING`    | Transient, with `details: { orderId }`                |
 | 409    | `INSUFFICIENT_STOCK`      | Final, with every short line in `details`             |
 | 409    | `PRICE_CHANGED`           | Final, with the current breakdown                     |
+| 409    | `COUPON_RESERVED`         | Transient: the coupon is held by a pending payment    |
+| 409    | `COUPON_ALREADY_REDEEMED` | Final                                                 |
 | 422    | `CART_EMPTY`              | Final                                                 |
+| 422    | `COUPON_INVALID`          | Final: no coupon has this code                        |
 | 422    | `IDEMPOTENCY_KEY_REUSED`  | Not stored; the existing row is unchanged             |
 | 500    | `INTERNAL`                | Rolled back in reserve. After reserve, the key already points to the order |
 | 503    | `LOCK_TIMEOUT`            | Rolled back in reserve. After reserve, the key already points to the order |
@@ -418,12 +497,23 @@ Each test that guards an enforcement was run once with that enforcement removed,
 | The decline writing back the stock read at reserve time          | T18: stock 3 instead of 11                                    |
 | The savepoint, with the order insert moved before the checks     | T22: an order row survives the 409                            |
 | The price guard                                                  | T20 `PRICE_CHANGED` and T21                                   |
+| `FOR NO KEY UPDATE` on the coupon in reserve                     | T6: one checkout waits on the barrier at `UPDATE coupons`, the other four on `orders_live_coupon_uq` behind it, then get 500 (23505) instead of 409 `COUPON_RESERVED` |
+| The `reserved` check in `availableCoupon`                        | T6: the four losers reach the order insert and hit `orders_live_coupon_uq` (23505), so 500 instead of 409 |
+| Setting the coupon to `reserved` in reserve                      | T6, T13 (the coupon is `available` while pending), T20 "COUPON_RESERVED stores nothing", T24 reserved-preview row |
+| Redeeming the coupon on approval in `finalizeOrder`              | T6, T13, T19: the coupon is not `redeemed`                    |
+| Releasing the coupon on a decline in `finalizeOrder`             | T13: the coupon stays `reserved`                              |
+| The coupon discount in `priceLines`                              | T6, T19, T21, T22, T24, and T4 lowercase: every coupon checkout gets `PRICE_CHANGED` |
+| `couponCode` in the request hash                                 | T4 "the same key with a coupon" replays 201 instead of 422; T13's same key without the coupon replays instead of 422 |
+| `.toUpperCase()` in `couponCodeSchema`                           | T4 lowercase coupon code, T21 and T24 previews, and the unit test |
+| The Crockford alias `.overwrite` in `couponCodeSchema`           | The unit test "reads a typed I or L as 1 and O as 0"         |
+| `pg_advisory_xact_lock` in generation                            | T9 fails with "1 request(s) finished without blocking on the barrier". Without a barrier, 5 parallel calls over 4 paid orders gave `[201, 500, 500, 500, 500]` 9 runs out of 10 (23505 on `coupons_milestone_unique`) |
 
-On the barriers: in T1 and T2 every checkout blocks on `lockProducts` (the lamp row), and without the lock it blocks on the `UPDATE products` instead. In T3 the first request blocks on the cart lock and the other nine on its uncommitted key claim. In T5 all five block on the cart lock.
+On the barriers: in T1 and T2 every checkout blocks on `lockProducts` (the lamp row), and without the lock it blocks on the `UPDATE products` instead. In T3 the first request blocks on the cart lock and the other nine on its uncommitted key claim. In T5 all five block on the cart lock. In T6 all five block on the coupon lock in reserve; their product locks don't contend, because the five carts share no product. In T9 all five block on `pg_advisory_xact_lock`, which `pg_stat_activity` reports as `wait_event_type = 'Lock'`, `wait_event = 'advisory'`.
 
-Two notes:
+Three notes:
 
 - **Removing the savepoint alone fails no test.** Every check already runs before the first write. With the savepoint kept, even moving the order insert before the checks passes every test, because the final error rolls the insert back. It is defence in depth.
+- **Removing `UNIQUE (milestone)` fails no test (T9 passes, 3 runs out of 3).** The advisory lock already serializes generation, so no duplicate milestone is ever inserted. It is the backstop, like the savepoint.
 - **Removing `ORDER BY` from `lockProducts` fails no test (T7 passes, 3 runs out of 3).** A single `id IN (…)` statement scans the products in the same order in every transaction. Locking one line at a time in the cart's own order doesn't change it either, because the cart lines come from the `(cart_id, product_id)` primary key, already in product order. Only an order that really differs between transactions deadlocks. So T7 guards against per-line locking in an arbitrary order, and doesn't prove that `ORDER BY` is needed.
 
 On the barrier: with the cart lock present, every PUT blocks on `SELECT … FROM carts … FOR NO KEY UPDATE`. With it removed, every PUT blocks on the `INSERT INTO cart_items`, whose foreign-key check needs `FOR KEY SHARE` on the cart row that the barrier holds `FOR UPDATE`. So the barrier still lines the requests up, and they fail at the INSERT.
