@@ -12,7 +12,7 @@ export const COUPON_GENERATION_LOCK = 4_004;
 
 const MAX_CODE_ATTEMPTS = 3;
 
-/** The highest milestone with a coupon, 0 before the first. Coupon generation and the report both read this. */
+/** The highest milestone with a coupon, 0 before the first. */
 export const lastMilestone = sql`coalesce(max(${coupons.milestone}), 0)`.mapWith(Number);
 
 export const couponColumns = {
