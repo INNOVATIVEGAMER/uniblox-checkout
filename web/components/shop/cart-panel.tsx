@@ -13,8 +13,6 @@ import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { CheckoutPanel, type Quote } from './checkout-panel';
 
-const MAX_LINE_QUANTITY = 1000;
-
 export function CartPanel({ cartId, cart, onNewCart }: { cartId: string | null; cart: UseQueryResult<Cart>; onNewCart: () => void }) {
   return (
     <Card>
@@ -40,16 +38,17 @@ export function CartPanel({ cartId, cart, onNewCart }: { cartId: string | null; 
 function CartBody({ cart }: { cart: Cart }) {
   const [couponInput, setCouponInput] = useState('');
   const [appliedCoupon, setAppliedCoupon] = useState<string | null>(null);
+  const open = cart.status === 'open';
+  // A closed cart's coupon is held or redeemed by its own order, so a refetched preview would report it as taken.
   const preview = useQuery({
     queryKey: ['cart', cart.id, appliedCoupon],
-    queryFn: appliedCoupon === null ? skipToken : () => api.getCart(cart.id, appliedCoupon),
+    queryFn: !open || appliedCoupon === null ? skipToken : () => api.getCart(cart.id, appliedCoupon),
   });
   const editLine = useMutation({
     mutationFn: ({ productId, quantity }: { productId: string; quantity: number | null }) =>
       quantity === null ? api.removeItem(cart.id, productId) : api.setQuantity(cart.id, productId, quantity),
   });
 
-  const open = cart.status === 'open';
   const priced = appliedCoupon !== null && preview.data && !preview.isError ? preview.data : cart;
 
   function applyCoupon(event: FormEvent) {
@@ -93,34 +92,38 @@ function CartBody({ cart }: { cart: Cart }) {
         </Table>
       )}
 
-      <form onSubmit={applyCoupon} className="flex gap-2">
-        <Input placeholder="Coupon code" value={couponInput} onChange={(event) => setCouponInput(event.target.value)} />
-        <Button type="submit" variant="outline" disabled={couponInput.trim() === ''}>
-          Apply
-        </Button>
-        <Button type="button" variant="ghost" disabled={appliedCoupon === null} onClick={() => setAppliedCoupon(null)}>
-          Clear
-        </Button>
-      </form>
-      {appliedCoupon !== null && preview.isFetching && <p className="text-sm text-muted-foreground">Checking the coupon…</p>}
-      {appliedCoupon !== null && preview.error && <ErrorNotice error={preview.error} />}
+      {open && (
+        <>
+          <form onSubmit={applyCoupon} className="flex gap-2">
+            <Input placeholder="Coupon code" value={couponInput} onChange={(event) => setCouponInput(event.target.value)} />
+            <Button type="submit" variant="outline" disabled={couponInput.trim() === ''}>
+              Apply
+            </Button>
+            <Button type="button" variant="ghost" disabled={appliedCoupon === null} onClick={() => setAppliedCoupon(null)}>
+              Clear
+            </Button>
+          </form>
+          {appliedCoupon !== null && preview.isFetching && <p className="text-sm text-muted-foreground">Checking the coupon…</p>}
+          {appliedCoupon !== null && preview.error && <ErrorNotice error={preview.error} />}
 
-      <dl className="grid grid-cols-[1fr_auto] gap-y-1 text-sm">
-        <dt>Subtotal</dt>
-        <dd className="text-right">{formatPaise(priced.subtotalPaise)}</dd>
-        {priced.coupon && (
-          <>
-            <dt>
-              Coupon <code className="font-mono">{priced.coupon.code}</code> ({priced.coupon.percentOff}% off)
-            </dt>
-            <dd className="text-right">−{formatPaise(priced.discountPaise)}</dd>
-          </>
-        )}
-        <dt className="font-semibold">Total</dt>
-        <dd className="text-right font-semibold">
-          {formatPaise(priced.totalPaise)} <span className="font-mono text-xs text-muted-foreground">({priced.totalPaise} paise)</span>
-        </dd>
-      </dl>
+          <dl className="grid grid-cols-[1fr_auto] gap-y-1 text-sm">
+            <dt>Subtotal</dt>
+            <dd className="text-right">{formatPaise(priced.subtotalPaise)}</dd>
+            {priced.coupon && (
+              <>
+                <dt>
+                  Coupon <code className="font-mono">{priced.coupon.code}</code> ({priced.coupon.percentOff}% off)
+                </dt>
+                <dd className="text-right">−{formatPaise(priced.discountPaise)}</dd>
+              </>
+            )}
+            <dt className="font-semibold">Total</dt>
+            <dd className="text-right font-semibold">
+              {formatPaise(priced.totalPaise)} <span className="font-mono text-xs text-muted-foreground">({priced.totalPaise} paise)</span>
+            </dd>
+          </dl>
+        </>
+      )}
 
       <CheckoutPanel cart={cart} quote={quoteFor(cart, appliedCoupon, preview)} />
     </div>
@@ -165,7 +168,6 @@ function CartLineRow({
 }) {
   const [quantity, setQuantity] = useState(String(line.quantity));
   const parsed = Number(quantity);
-  const valid = Number.isInteger(parsed) && parsed >= 1 && parsed <= MAX_LINE_QUANTITY;
 
   return (
     <TableRow>
@@ -178,14 +180,12 @@ function CartLineRow({
         <div className="flex gap-1">
           <Input
             type="number"
-            min={1}
-            max={MAX_LINE_QUANTITY}
             className="w-20"
             value={quantity}
             disabled={disabled}
             onChange={(event) => setQuantity(event.target.value)}
           />
-          <Button size="sm" variant="outline" disabled={disabled || !valid || parsed === line.quantity} onClick={() => onSet(parsed)}>
+          <Button size="sm" variant="outline" disabled={disabled || quantity === '' || parsed === line.quantity} onClick={() => onSet(parsed)}>
             Set
           </Button>
         </div>

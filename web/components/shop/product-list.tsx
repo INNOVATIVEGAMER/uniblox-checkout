@@ -30,7 +30,8 @@ export function ProductList({
     },
   });
 
-  const cartClosed = cart !== null && cart.status !== 'open';
+  // Add sets the quantity to what is in the cart plus one, so it waits until the cart has loaded.
+  const canAdd = cartId === null || cart?.status === 'open';
 
   return (
     <Card>
@@ -60,7 +61,7 @@ export function ProductList({
                     <TableCell className="text-right">{formatPaise(product.pricePaise)}</TableCell>
                     <TableCell className="text-right">{product.stock}</TableCell>
                     <TableCell className="text-right">
-                      <Button size="sm" disabled={addToCart.isPending || cartClosed}onClick={() => addToCart.mutate(product.id)}>
+                      <Button size="sm" disabled={addToCart.isPending || !canAdd} onClick={() => addToCart.mutate(product.id)}>
                         Add
                       </Button>
                     </TableCell>

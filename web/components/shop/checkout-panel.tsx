@@ -36,6 +36,7 @@ export function CheckoutPanel({ cart, quote }: { cart: Cart; quote: Quote | null
   });
 
   const canStart = cart.status === 'open' && quote !== null && !send.isPending;
+  const sent = send.variables?.[0];
 
   function newAttempt(): Attempt | null {
     if (quote === null) return null;
@@ -86,12 +87,12 @@ export function CheckoutPanel({ cart, quote }: { cart: Cart; quote: Quote | null
           Change body, same key
         </Button>
       </div>
-      {attempt && (
+      {sent && (
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 font-mono text-xs">
           <dt className="text-muted-foreground">Idempotency-Key</dt>
-          <dd className="break-all">{attempt.key}</dd>
+          <dd className="break-all">{sent.key}</dd>
           <dt className="text-muted-foreground">Body</dt>
-          <dd className="break-all">{JSON.stringify(attempt.body)}</dd>
+          <dd className="break-all">{JSON.stringify(sent.body)}</dd>
         </dl>
       )}
       {send.isPending && <p className="text-sm text-muted-foreground">Sending…</p>}

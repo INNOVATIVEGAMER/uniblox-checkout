@@ -100,7 +100,8 @@ export type Order = z.infer<typeof orderSchema>;
 export type OrderStatus = Order['status'];
 export type Coupon = z.infer<typeof couponSchema>;
 export type PaymentToken = (typeof PAYMENT_TOKENS)[number];
-export type CheckoutBody = { expectedTotalPaise: number; paymentToken: string; couponCode?: string };
+export type CheckoutBody = { expectedTotalPaise: number; paymentToken: PaymentToken; couponCode?: string };
+export type ProductPatch = { pricePaise?: number; stock?: number };
 
 /** A response in the API's error envelope. Anything else that fails is a plain Error. */
 export class ApiError extends Error {
@@ -168,26 +169,24 @@ async function request<T>(
 
 const data = async <T>(response: Promise<ApiResponse<T>>) => (await response).data;
 
-const segment = encodeURIComponent;
-
 export const api = {
   listProducts: () => data(request('GET', '/products', z.array(productSchema))),
-  patchProduct: (id: string, patch: { pricePaise?: number; stock?: number }) =>
-    data(request('PATCH', `/admin/products/${segment(id)}`, productSchema, { body: patch })),
+  patchProduct: (id: string, patch: ProductPatch) =>
+    data(request('PATCH', `/admin/products/${encodeURIComponent(id)}`, productSchema, { body: patch })),
 
   createCart: () => data(request('POST', '/carts', cartSchema)),
   getCart: (id: string, couponCode?: string) => {
     const query = couponCode === undefined ? '' : `?couponCode=${encodeURIComponent(couponCode)}`;
-    return data(request('GET', `/carts/${segment(id)}${query}`, cartSchema));
+    return data(request('GET', `/carts/${encodeURIComponent(id)}${query}`, cartSchema));
   },
   setQuantity: (cartId: string, productId: string, quantity: number) =>
-    data(request('PUT', `/carts/${segment(cartId)}/items/${segment(productId)}`, cartSchema, { body: { quantity } })),
+    data(request('PUT', `/carts/${encodeURIComponent(cartId)}/items/${encodeURIComponent(productId)}`, cartSchema, { body: { quantity } })),
   removeItem: (cartId: string, productId: string) =>
-    data(request('DELETE', `/carts/${segment(cartId)}/items/${segment(productId)}`, cartSchema)),
+    data(request('DELETE', `/carts/${encodeURIComponent(cartId)}/items/${encodeURIComponent(productId)}`, cartSchema)),
   checkout: (cartId: string, idempotencyKey: string, body: CheckoutBody) =>
-    request('POST', `/carts/${segment(cartId)}/checkout`, orderSchema, { body, idempotencyKey }),
+    request('POST', `/carts/${encodeURIComponent(cartId)}/checkout`, orderSchema, { body, idempotencyKey }),
 
-  getOrder: (id: string) => data(request('GET', `/orders/${segment(id)}`, orderSchema)),
+  getOrder: (id: string) => data(request('GET', `/orders/${encodeURIComponent(id)}`, orderSchema)),
   listOrders: (status?: OrderStatus) =>
     data(request('GET', status === undefined ? '/admin/orders' : `/admin/orders?status=${status}`, z.array(orderSchema))),
 

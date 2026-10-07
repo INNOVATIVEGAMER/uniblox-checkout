@@ -2,18 +2,16 @@
 
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { type Product, api, formatPaise } from '@/lib/api';
+import { type Product, type ProductPatch, api, formatPaise } from '@/lib/api';
 import { ErrorNotice } from '@/components/error-notice';
 import { QueryState } from '@/components/query-state';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
-type Patch = { pricePaise?: number; stock?: number };
-
 export function ProductsTab() {
   const products = useQuery({ queryKey: ['products'], queryFn: api.listProducts });
-  const patch = useMutation({ mutationFn: ({ id, changes }: { id: string; changes: Patch }) => api.patchProduct(id, changes) });
+  const patch = useMutation({ mutationFn: ({ id, changes }: { id: string; changes: ProductPatch }) => api.patchProduct(id, changes) });
 
   return (
     <div className="space-y-3">
@@ -50,14 +48,14 @@ export function ProductsTab() {
   );
 }
 
-function ProductRow({ product, saving, onSave }: { product: Product; saving: boolean; onSave: (changes: Patch) => void }) {
+function ProductRow({ product, saving, onSave }: { product: Product; saving: boolean; onSave: (changes: ProductPatch) => void }) {
   const [price, setPrice] = useState(String(product.pricePaise));
   const [stock, setStock] = useState(String(product.stock));
 
-  const changes: Patch = {};
+  const changes: ProductPatch = {};
   if (Number(price) !== product.pricePaise) changes.pricePaise = Number(price);
   if (Number(stock) !== product.stock) changes.stock = Number(stock);
-  const valid = price !== '' && stock !== '' && Number.isInteger(Number(price)) && Number.isInteger(Number(stock));
+  const valid = price !== '' && stock !== '';
 
   return (
     <TableRow>

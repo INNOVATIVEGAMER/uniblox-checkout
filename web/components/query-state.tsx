@@ -15,7 +15,17 @@ export function QueryState<T>({
   children: (data: T) => ReactNode;
 }) {
   if (query.isPending) return <p className="text-sm text-muted-foreground">Loading…</p>;
-  if (query.isError) return <ErrorNotice error={query.error} />;
-  if (isEmpty?.(query.data)) return <p className="text-sm text-muted-foreground">{empty}</p>;
-  return children(query.data);
+  if (query.isLoadingError) return <ErrorNotice error={query.error} />;
+
+  // A failed refetch keeps the last data mounted in the same slot, so state below it (an attempt's Idempotency-Key) survives.
+  return (
+    <>
+      {query.isRefetchError && (
+        <div className="mb-3">
+          <ErrorNotice error={query.error} />
+        </div>
+      )}
+      {isEmpty?.(query.data) ? <p className="text-sm text-muted-foreground">{empty}</p> : children(query.data)}
+    </>
+  );
 }
