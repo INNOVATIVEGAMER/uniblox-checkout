@@ -4,6 +4,13 @@ The backend for a checkout and rewards service: carts, idempotent checkout, mile
 
 The design lives in [`architecture.html`](architecture.html), and the reasoning behind each choice is in [`DECISIONS.md`](DECISIONS.md).
 
+## Submission notes
+
+- **Time spent:** about 8 hours of focused work with AI (Claude Code), over the 4–6 hour guideline. The extra time went into modelling payments (a fake gateway with pending-payment recovery) and into review rounds before each merge. How AI was used is in [`DECISIONS.md`](DECISIONS.md#how-ai-tools-were-used).
+- **Incomplete:** nothing the brief requires. The deferred items, and how each would be finished, are in [`DECISIONS.md`](DECISIONS.md#implemented-versus-deferred). Nothing is deployed: it runs locally with Docker, as the brief asks.
+- **History:** each issue was built in its own PR and squash-merged, so `main` has one commit per step. The [merged PRs](../../pulls?q=is%3Apr+is%3Amerged) (#8–#17) show the commits and the review rounds inside each step.
+- **Admin routes:** everything under `/admin` is administrative and unauthenticated, as the brief allows.
+
 ## Setup
 
 You need Node 22 or later, pnpm 10, and Docker.
@@ -40,7 +47,7 @@ The service refuses to start if any value breaks its rule.
 
 ## Demo UI
 
-`web/` is a small Next.js app that drives the API from a browser. It is a thin client: a panel on every page shows the latest call's method, path, status, `Idempotency-Key`, `Idempotent-Replayed`, `Retry-After` and raw JSON body, and every error is shown as the API's `code`, `message` and `details`. Its choices are in [`DECISIONS.md`](DECISIONS.md) ("Demo frontend").
+`web/` is a small Next.js app that drives the API from a browser. It is a thin client: a panel on every page shows the latest call's method, path, status, `Idempotency-Key`, `Idempotent-Replayed`, `Retry-After` and raw JSON body, and every error is shown as the API's `code`, `message` and `details`. It has no tests of its own; the walkthrough below is the check.
 
 Start the API with settings that make the demo fit in two minutes. Leave it running for the whole walkthrough: the fake gateway keeps its charges in memory, so a restart turns a timed-out approved payment into an abandoned one.
 

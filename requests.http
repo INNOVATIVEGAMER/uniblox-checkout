@@ -246,7 +246,31 @@ Idempotency-Key: timeout-1-{{timeoutCart.response.body.id}}
 
 { "expectedTotalPaise": 129950, "paymentToken": "tok_timeout_approved" }
 
-### Admin: resolve every stale pending order. Before the TTL: { "resolved": [], "stillPending": 1 }
+### A cart with 1 mouse, for the other two tokens
+# @name declineTokensCart
+POST {{base}}/carts
+
+###
+PUT {{base}}/carts/{{declineTokensCart.response.body.id}}/items/p_mouse
+Content-Type: application/json
+
+{ "quantity": 1 }
+
+### 402 PAYMENT_FAILED with reason insufficient_funds. The cart reopens
+POST {{base}}/carts/{{declineTokensCart.response.body.id}}/checkout
+Content-Type: application/json
+Idempotency-Key: funds-1-{{declineTokensCart.response.body.id}}
+
+{ "expectedTotalPaise": 129950, "paymentToken": "pm_card_chargeDeclinedInsufficientFunds" }
+
+### 202: the gateway declined the charge, but the response timed out. After the TTL, reconcile resolves it as failed
+POST {{base}}/carts/{{declineTokensCart.response.body.id}}/checkout
+Content-Type: application/json
+Idempotency-Key: funds-2-{{declineTokensCart.response.body.id}}
+
+{ "expectedTotalPaise": 129950, "paymentToken": "tok_timeout_declined" }
+
+### Admin: resolve every stale pending order. Before the TTL: { "resolved": [], "stillPending": 2 }
 POST {{base}}/admin/payments/reconcile
 
 ### Admin: list every order, oldest first
