@@ -137,7 +137,7 @@ For HTTP, Express and Fastify were the alternatives to Hono. For validation, the
 
 ### Decision: Admin routes have no authentication
 
-**Context:** `PATCH /admin/products/:id`, `POST` and `GET /admin/coupons`, `GET /admin/orders` and `POST /admin/payments/reconcile` change prices and stock, mint discounts, expose every order, and make gateway calls. The brief asks for admin APIs but no users or auth.
+**Context:** `PATCH /admin/products/:id`, `POST` and `GET /admin/coupons`, `GET /admin/orders`, `GET /admin/report` and `POST /admin/payments/reconcile` change prices and stock, mint discounts, expose every order and the revenue, and make gateway calls. The brief asks for admin APIs but no users or auth.
 
 **Options considered:**
 
@@ -153,7 +153,7 @@ For HTTP, Express and Fastify were the alternatives to Hono. For validation, the
 
 **Consequences:**
 
-- Anyone who can reach the server can change prices, generate coupons and trigger reconcile. Reconcile is safe to call repeatedly, because it resolves only orders past the TTL and each order exactly once (I13), but each call can make two gateway calls per stale order.
+- Anyone who can reach the server can change prices, generate coupons, read every order and the sales figures, and trigger reconcile. Reconcile is safe to call repeatedly, because it resolves only orders past the TTL and each order exactly once (I13), but each call can make two gateway calls per stale order.
 - Idempotency keys are global for the same reason (see the idempotency decision).
 
 ### Decision: PUT sets the quantity, and DELETE is idempotent
@@ -513,6 +513,8 @@ The lock order, isolation level and key storage rule are in the decisions above.
 **Pending recovery** runs before any transaction opens, on the checkout, PUT and DELETE that a stale hold would block, and on `POST /admin/payments/reconcile`. It reads the stale orders, asks the gateway with no connection held, then calls the same `finalizeOrder` as phase 3. Its decline path locks the cart, then the products by ID, then the coupon, the same order as reserve. See "Hold unknown outcomes, and cancel before release".
 
 **The report** is the only transaction not at READ COMMITTED: one `READ ONLY` transaction at `REPEATABLE READ`, so all its figures come from one snapshot. It takes no locks. See "The report reads one READ ONLY REPEATABLE READ snapshot".
+
+**The orders list** (`selectOrderViews`) reads at READ COMMITTED in two statements: the orders matching the filter, then the lines of exactly those order ids, passed as one array parameter. Each order's status is the one the first statement saw, and its lines are always complete, because an order's lines are inserted in the same transaction as the order and never change. The lines are not filtered by status again: an order finalized between the two statements would otherwise come back with no lines.
 
 Every lock wait is bounded: the pool sets `lock_timeout` from `LOCK_TIMEOUT_MS` on every connection. A wait past that limit fails with Postgres error `55P03`, which the error handler maps to `503 LOCK_TIMEOUT`.
 

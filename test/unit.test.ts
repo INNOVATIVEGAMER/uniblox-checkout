@@ -44,11 +44,11 @@ describe('T27 money', () => {
 
 describe('T28 milestones', () => {
   it.each([
-    ['n − 1 paid orders', { paidOrders: 4, lastMilestone: 0 }, { next: 1, eligible: false, remainingEligible: 0, nextMilestoneAt: 5 }],
-    ['n paid orders', { paidOrders: 5, lastMilestone: 0 }, { next: 1, eligible: true, remainingEligible: 0, nextMilestoneAt: 5 }],
-    ['2n paid orders, none rewarded: the oldest first', { paidOrders: 10, lastMilestone: 0 }, { next: 1, eligible: true, remainingEligible: 1, nextMilestoneAt: 5 }],
-    ['2n paid orders, the first rewarded', { paidOrders: 10, lastMilestone: 1 }, { next: 2, eligible: true, remainingEligible: 0, nextMilestoneAt: 10 }],
-    ['2n + 1 paid orders, both rewarded', { paidOrders: 11, lastMilestone: 2 }, { next: 3, eligible: false, remainingEligible: 0, nextMilestoneAt: 15 }],
+    ['n − 1 paid orders', { paidOrders: 4, lastMilestone: 0 }, { reached: 0, unrewarded: 0, next: 1, eligible: false, remainingEligible: 0, nextMilestoneAt: 5 }],
+    ['n paid orders', { paidOrders: 5, lastMilestone: 0 }, { reached: 1, unrewarded: 1, next: 1, eligible: true, remainingEligible: 0, nextMilestoneAt: 5 }],
+    ['2n paid orders, none rewarded: the oldest first', { paidOrders: 10, lastMilestone: 0 }, { reached: 2, unrewarded: 2, next: 1, eligible: true, remainingEligible: 1, nextMilestoneAt: 5 }],
+    ['2n paid orders, the first rewarded', { paidOrders: 10, lastMilestone: 1 }, { reached: 2, unrewarded: 1, next: 2, eligible: true, remainingEligible: 0, nextMilestoneAt: 10 }],
+    ['2n + 1 paid orders, both rewarded', { paidOrders: 11, lastMilestone: 2 }, { reached: 2, unrewarded: 0, next: 3, eligible: false, remainingEligible: 0, nextMilestoneAt: 15 }],
   ])('%s', (_label, input, expected) => {
     expect(milestoneProgress({ n: 5, ...input })).toEqual(expected);
   });

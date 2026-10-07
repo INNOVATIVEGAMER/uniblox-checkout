@@ -1,4 +1,4 @@
-import { type SQL, asc, eq } from 'drizzle-orm';
+import { type SQL, asc, eq, sql } from 'drizzle-orm';
 import type { Db } from '../../db/client';
 import { coupons, orderItems, orders } from '../../db/schema';
 import { AppError, toErrorBody } from '../../errors';
@@ -34,7 +34,10 @@ function toCouponView(code: string | null, percentOff: number | null) {
   return { code, percentOff };
 }
 
-/** Order views matching `where`, oldest first. The lines query reuses `where` through the orders join. */
+/**
+ * Order views matching `where`, oldest first. The lines are read by the fetched ids, not by `where`: an order's
+ * status can change between the two reads, but its lines commit with it and never change.
+ */
 export async function selectOrderViews(db: Db, where?: SQL) {
   const rows = await db
     .select(orderColumns)
@@ -43,14 +46,17 @@ export async function selectOrderViews(db: Db, where?: SQL) {
     .where(where)
     .orderBy(asc(orders.createdAt), asc(orders.id));
   const lines = await db
-    .select({ orderId: orderItems.orderId, ...lineColumns })
+    .select({ orderId: orderItems.orderId, line: lineColumns })
     .from(orderItems)
-    .innerJoin(orders, eq(orders.id, orderItems.orderId))
-    .where(where)
+    .where(sql`${orderItems.orderId} = ANY(${sql.param(rows.map((r) => r.id))})`)
     .orderBy(asc(orderItems.orderId), asc(orderItems.productId));
 
-  const linesByOrder = new Map<string, Omit<(typeof lines)[number], 'orderId'>[]>();
-  for (const { orderId, ...line } of lines) linesByOrder.set(orderId, [...(linesByOrder.get(orderId) ?? []), line]);
+  const linesByOrder = new Map<string, (typeof lines)[number]['line'][]>();
+  for (const { orderId, line } of lines) {
+    const group = linesByOrder.get(orderId);
+    if (group) group.push(line);
+    else linesByOrder.set(orderId, [line]);
+  }
   return rows.map(({ couponCode, percentOff, ...order }) => ({
     ...order,
     coupon: toCouponView(couponCode, percentOff),
