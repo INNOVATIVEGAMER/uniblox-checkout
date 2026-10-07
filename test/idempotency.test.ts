@@ -215,7 +215,7 @@ describe('T21 price changed after add', () => {
     const res = await app.request(`/carts/${cartId}?couponCode=${coupon.code.toLowerCase()}`);
     expect(res.status).toBe(200);
     const preview = cartViewSchema.parse(await res.json());
-    expect(preview).toMatchObject({ subtotalPaise: 234_947, discountPaise: 23_494, totalPaise: 211_453, coupon: { code: coupon.code, percentOff: 10 } });
+    expect(preview).toMatchObject({ subtotalPaise: 3 * priceOf('p_cable') + priceOf('p_mouse'), discountPaise: 23_494, totalPaise: 211_453, coupon: { code: coupon.code, percentOff: 10 } });
 
     const paid = await expectOrder(await postCheckout(app, cartId, newKey(), { ...visa(preview.totalPaise), couponCode: coupon.code }), 201);
     expect(paid).toMatchObject({ discountPaise: 23_494, totalPaise: 211_453 });

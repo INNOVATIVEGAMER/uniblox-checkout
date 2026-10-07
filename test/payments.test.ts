@@ -121,7 +121,7 @@ describe('T13 a declined payment with a coupon', () => {
     await expectError(await postCheckout(app, cartId, key, declined(total)), 422, 'IDEMPOTENCY_KEY_REUSED');
 
     const paid = await expectOrder(await postCheckout(app, cartId, newKey(), { ...visa(total), couponCode: coupon.code }), 201);
-    expect(paid).toMatchObject({ discountPaise: 24_990, totalPaise: total, coupon: { code: coupon.code, percentOff: 10 } });
+    expect(paid).toMatchObject({ discountPaise: priceOf('p_lamp') - total, totalPaise: total, coupon: { code: coupon.code, percentOff: 10 } });
     expect(await couponRow(db, coupon.code)).toEqual({ status: 'redeemed', redeemedAt: expect.any(Date) });
   });
 });

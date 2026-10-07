@@ -91,7 +91,7 @@ describe('T24 cart view', () => {
           name: 'USB-C Cable',
           unitPricePaise: priceOf('p_cable'),
           quantity: 3,
-          lineTotalPaise: 104_997,
+          lineTotalPaise: 3 * priceOf('p_cable'),
           available: true,
         },
         {
@@ -103,10 +103,10 @@ describe('T24 cart view', () => {
           available: true,
         },
       ],
-      subtotalPaise: 234_947,
+      subtotalPaise: 3 * priceOf('p_cable') + priceOf('p_mouse'),
       coupon: null,
       discountPaise: 0,
-      totalPaise: 234_947,
+      totalPaise: 3 * priceOf('p_cable') + priceOf('p_mouse'),
     });
   });
 

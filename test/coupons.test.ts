@@ -241,8 +241,8 @@ describe('T24 the coupon preview', () => {
       status: 'open',
       subtotalPaise: priceOf('p_cable'),
       coupon: { code: coupon.code, percentOff: 10 },
-      discountPaise: 3_499,
-      totalPaise: 31_500,
+      discountPaise: priceOf('p_cable') - withTenPercent(priceOf('p_cable')),
+      totalPaise: withTenPercent(priceOf('p_cable')),
     });
     expect(await snapshotDb(db)).toEqual(before);
   });
