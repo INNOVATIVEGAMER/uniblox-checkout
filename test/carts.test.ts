@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { cartItems, carts, products } from '../src/db/schema';
 import { MAX_CART_LINES } from '../src/domain/money';
 import { createTestApp, sendJson } from './helpers/app';
+import { bulkId, cartRequests, cartViewSchema, fillCart } from './helpers/carts';
 import { resetDb, snapshotDb } from './helpers/db';
 
 const { app, db, pool } = createTestApp();
@@ -11,39 +12,11 @@ const { app, db, pool } = createTestApp();
 beforeEach(() => resetDb(db));
 afterAll(() => pool.end());
 
-const cartViewSchema = z.strictObject({
-  id: z.uuid(),
-  status: z.enum(['open', 'pending_payment', 'checked_out']),
-  lines: z.array(
-    z.strictObject({
-      productId: z.string(),
-      name: z.string(),
-      unitPricePaise: z.int(),
-      quantity: z.int(),
-      lineTotalPaise: z.int(),
-      available: z.boolean(),
-    }),
-  ),
-  subtotalPaise: z.int(),
-  discountPaise: z.int(),
-  totalPaise: z.int(),
-});
-
 const errorBodySchema = z.strictObject({
   error: z.strictObject({ code: z.string(), message: z.string(), details: z.unknown().optional() }),
 });
 
-async function newCart(): Promise<string> {
-  const res = await app.request('/carts', { method: 'POST' });
-  expect(res.status).toBe(201);
-  return cartViewSchema.parse(await res.json()).id;
-}
-
-const putItem = (cartId: string, productId: string, quantity: number) =>
-  sendJson(app, 'PUT', `/carts/${cartId}/items/${productId}`, { quantity });
-
-const deleteItem = (cartId: string, productId: string) =>
-  app.request(`/carts/${cartId}/items/${productId}`, { method: 'DELETE' });
+const { newCart, putItem, deleteItem } = cartRequests(app);
 
 async function expectView(res: Response, status: number) {
   expect(res.status).toBe(status);
@@ -191,21 +164,9 @@ describe('T24 soft stock check', () => {
 });
 
 describe('T24 line cap', () => {
-  const bulkId = (i: number) => `p_bulk_${String(i).padStart(2, '0')}`;
-
   async function cartWithBulkLines(lineCount: number): Promise<string> {
-    await db.insert(products).values(
-      Array.from({ length: MAX_CART_LINES + 1 }, (_, i) => ({
-        id: bulkId(i + 1),
-        name: `Bulk ${i + 1}`,
-        pricePaise: 100,
-        stock: 10,
-      })),
-    );
     const cartId = await newCart();
-    await db
-      .insert(cartItems)
-      .values(Array.from({ length: lineCount }, (_, i) => ({ cartId, productId: bulkId(i + 1), quantity: 1 })));
+    await fillCart(db, cartId, lineCount);
     return cartId;
   }
 
